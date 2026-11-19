@@ -53,35 +53,11 @@ adapt results, and own the OAuth bridge.
 - Tool handlers are wrapped with `wrapToolHandler`; don't add per-tool try/catch
 - All fetches use `AbortSignal.timeout`
 
-## OAuth Bridge Invariants
+## OAuth Bridge
 
-- Dexcom authorization codes are single use and expire in one minute: exchange
-  them inside the callback, never at `/token`
-- Dexcom refresh tokens are single use: always go through
-  `createDexcomSessions`, which single-flights in-process, holds a KV lease
-  (`["refresh-lock", userId]`, deadline stored in the value) across processes,
-  and persists rotated tokens before use
-- Never return or log Dexcom tokens; MCP tokens are stored only as SHA-256
-  hashes
-- MCP tokens belong to a token family (one authorization plus its rotations)
-  bound to the grant's `grantId`. Tokens are valid only while the family is live
-  and the user's current grant has that `grantId`. Re-authorizing keeps an
-  existing `grantId`; a deleted grant gets a new one, so old tokens never
-  revive. A replayed refresh token deletes its family, except the same client
-  re-sending it within 10 s (a retry), which is only refused. Records without
-  `familyId`/`grantId` are invalid
-- Client registrations expire after a day unless used; each token issuance
-  extends them to the refresh token lifetime
-- `/authorize` requires PKCE S256 and an exact registered `redirect_uri`;
-  malformed requests get an error page, never a redirect (no open redirector).
-  Consent is bound to a SameSite=Strict cookie, and the Dexcom callback to a
-  SameSite=Lax cookie set on approval (so a forwarded Dexcom login URL cannot
-  complete someone else's authorization). On https issuers both cookies use the
-  `__Host-` prefix with `Path=/`
-- Request bodies are read with `readBodyText`, which stops at the size cap
-- Only a Dexcom 400 on refresh deletes a grant, and only with a compare-and-swap
-  on the versionstamp the refresh read; 429/401/5xx are rethrown
-- The same region host serves login, token, and data calls
+Before changing `src/oauth/`, `src/store.ts`, `src/session.ts`, or
+`src/login.ts`, read the invariants in `CODING_STANDARDS.md`; reviews check
+diffs against it.
 
 ## Environment Variables
 

@@ -1,0 +1,25 @@
+# Git hooks (https://lefthook.dev). Enable with `lefthook install`.
+min_version: 2.2.2
+
+pre-commit:
+  parallel: true
+  commands:
+    fmt:
+      glob: "*.{ts,json,md}"
+      exclude:
+        - ".scratch/*"
+      run: deno fmt --check {staged_files}
+    lint:
+      glob: "*.ts"
+      run: deno lint {staged_files}
+
+pre-push:
+  parallel: true
+  commands:
+    check:
+      run: deno task check
+    test:
+      run: deno task test
+    lockfile:
+      # Fails when deno.lock no longer matches the workspace manifests.
+      run: deno install --frozen

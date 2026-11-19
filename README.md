@@ -219,6 +219,7 @@ deno add jsr:@wyattjoh/dexcom
 ```bash
 git clone https://github.com/wyattjoh/dexcom-mcp.git && cd dexcom-mcp
 cp .env.example .env
+lefthook install        # fmt/lint on commit; check, test, lockfile on push
 deno task test          # unit and integration tests (fake Dexcom, no credentials needed)
 deno task check && deno task lint && deno fmt --check
 deno task dev:http      # local HTTP server with reload

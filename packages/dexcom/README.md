@@ -8,7 +8,7 @@ alerts, devices, and data ranges. Used by
 <!-- x-release-please-start-version -->
 
 ```bash
-deno add jsr:@wyattjoh/dexcom@0.1.0
+deno add jsr:@wyattjoh/dexcom@0.1.1
 ```
 
 <!-- x-release-please-end -->

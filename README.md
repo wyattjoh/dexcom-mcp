@@ -51,7 +51,7 @@ servers locally.
 
    <!-- x-release-please-start-version -->
    ```bash
-   deno install --global --name dexcom-mcp --unstable-kv --allow-net --allow-env --allow-read --allow-write --allow-run jsr:@wyattjoh/dexcom-mcp@0.1.0
+   deno install --global --name dexcom-mcp --unstable-kv --allow-net --allow-env --allow-read --allow-write --allow-run jsr:@wyattjoh/dexcom-mcp@0.2.0
    ```
    <!-- x-release-please-end -->
 
@@ -92,7 +92,7 @@ servers locally.
            "--allow-read",
            "--allow-write",
            "--allow-run",
-           "jsr:@wyattjoh/dexcom-mcp@0.1.0"
+           "jsr:@wyattjoh/dexcom-mcp@0.2.0"
          ],
          "env": {
            "DEXCOM_CLIENT_ID": "your-id",
@@ -127,7 +127,7 @@ connects approves access, signs in with Dexcom, and only sees their own data.
    DEXCOM_CLIENT_SECRET=your-secret \
    DEXCOM_REGION=us \
    MCP_PUBLIC_URL=https://dexcom.example.com \
-     deno run --unstable-kv --allow-net --allow-env --allow-read --allow-write --allow-run jsr:@wyattjoh/dexcom-mcp@0.1.0 --http --host 0.0.0.0 --port 3000
+     deno run --unstable-kv --allow-net --allow-env --allow-read --allow-write --allow-run jsr:@wyattjoh/dexcom-mcp@0.2.0 --http --host 0.0.0.0 --port 3000
    ```
    <!-- x-release-please-end -->
 
@@ -135,7 +135,7 @@ connects approves access, signs in with Dexcom, and only sees their own data.
 
    <!-- x-release-please-start-version -->
    ```bash
-   docker build -t dexcom-mcp https://github.com/wyattjoh/dexcom-mcp.git#dexcom-mcp-v0.1.0
+   docker build -t dexcom-mcp https://github.com/wyattjoh/dexcom-mcp.git#dexcom-mcp-v0.2.0
    docker run -d -p 3000:3000 -v dexcom-data:/data \
      -e DEXCOM_CLIENT_ID=your-id -e DEXCOM_CLIENT_SECRET=your-secret \
      -e DEXCOM_REGION=us -e MCP_PUBLIC_URL=https://dexcom.example.com \

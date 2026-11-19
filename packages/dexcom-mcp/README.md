@@ -15,7 +15,7 @@ Create an app at [developer.dexcom.com](https://developer.dexcom.com) and add
 <!-- x-release-please-start-version -->
 
 ```bash
-deno install --global --name dexcom-mcp --unstable-kv --allow-net --allow-env --allow-read --allow-write --allow-run jsr:@wyattjoh/dexcom-mcp@0.1.0
+deno install --global --name dexcom-mcp --unstable-kv --allow-net --allow-env --allow-read --allow-write --allow-run jsr:@wyattjoh/dexcom-mcp@0.2.0
 
 DEXCOM_CLIENT_ID=your-id DEXCOM_CLIENT_SECRET=your-secret dexcom-mcp login
 
@@ -30,7 +30,7 @@ claude mcp add dexcom -e DEXCOM_CLIENT_ID=your-id -e DEXCOM_CLIENT_SECRET=your-s
 
 ```bash
 MCP_PUBLIC_URL=https://dexcom.example.com DEXCOM_CLIENT_ID=... DEXCOM_CLIENT_SECRET=... \
-  deno run --unstable-kv --allow-net --allow-env --allow-read --allow-write --allow-run jsr:@wyattjoh/dexcom-mcp@0.1.0 --http --host 0.0.0.0
+  deno run --unstable-kv --allow-net --allow-env --allow-read --allow-write --allow-run jsr:@wyattjoh/dexcom-mcp@0.2.0 --http --host 0.0.0.0
 ```
 
 <!-- x-release-please-end -->

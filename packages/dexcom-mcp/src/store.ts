@@ -152,6 +152,14 @@ export type RefreshTokenRedemption =
      * Family the spent token belonged to.
      */
     familyId: string;
+    /**
+     * Client the token was issued to.
+     */
+    clientId: string;
+    /**
+     * When the token was first redeemed (milliseconds since epoch).
+     */
+    spentAt: number;
   }
   | {
     /**
@@ -314,6 +322,12 @@ export interface Store {
 
 const TEN_MINUTES_MS = 10 * 60 * 1000;
 
+interface SpentToken {
+  familyId: string;
+  clientId: string;
+  spentAt: number;
+}
+
 interface RefreshLease {
   owner: string;
   expiresAt: number;
@@ -399,13 +413,11 @@ export function createKvStore(kv: Deno.Kv): Store {
       const hash = await sha256(token);
       const key = ["refresh", hash];
       const usedKey = ["refresh-used", hash];
-      const [entry, used] = await kv.getMany<[McpTokenRecord, string]>([
+      const [entry, used] = await kv.getMany<[McpTokenRecord, SpentToken]>([
         key,
         usedKey,
       ]);
-      if (typeof used.value === "string") {
-        return { status: "reused", familyId: used.value };
-      }
+      if (used.value) return { status: "reused", ...used.value };
       const record = isLive(entry.value ?? undefined);
       if (!record) return { status: "invalid" };
       // Spend the token and leave a tombstone in one atomic step, so a
@@ -414,13 +426,24 @@ export function createKvStore(kv: Deno.Kv): Store {
         .check(entry)
         .check(used)
         .delete(key)
-        .set(usedKey, record.familyId, {
-          expireIn: remainingMs(record.expiresAt),
-        })
+        .set(
+          usedKey,
+          {
+            familyId: record.familyId,
+            clientId: record.clientId,
+            spentAt: Date.now(),
+          } satisfies SpentToken,
+          {
+            expireIn: remainingMs(record.expiresAt),
+          },
+        )
         .commit();
-      return result.ok
-        ? { status: "redeemed", record }
-        : { status: "reused", familyId: record.familyId };
+      return result.ok ? { status: "redeemed", record } : {
+        status: "reused",
+        familyId: record.familyId,
+        clientId: record.clientId,
+        spentAt: Date.now(),
+      };
     },
     async putFamily(family) {
       await kv.set(["family", family.familyId], family, {

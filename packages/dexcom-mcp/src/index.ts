@@ -11,7 +11,11 @@ import {
 import deno from "../deno.json" with { type: "json" };
 import { runLogin } from "./login.ts";
 import { configureLogging, getLogger } from "./logging.ts";
-import { type BridgeContext, DEXCOM_CALLBACK_PATH } from "./oauth/context.ts";
+import {
+  type BridgeContext,
+  DEXCOM_CALLBACK_PATH,
+  REFRESH_RETRY_GRACE_MS,
+} from "./oauth/context.ts";
 import { createDexcomSessions } from "./session.ts";
 import { createKvStore, type Store } from "./store.ts";
 import { createHttpHandler, startHttpServer } from "./transports/http.ts";
@@ -70,6 +74,25 @@ function defaultKvPath(): string {
 
 function kvPath(): string {
   return Deno.env.get("DEXCOM_MCP_KV_PATH") ?? defaultKvPath();
+}
+
+/**
+ * 0.1.0 honored XDG_DATA_HOME on macOS too; point at a sign-in left there.
+ */
+async function legacyKvHint(): Promise<string> {
+  const xdg = Deno.env.get("XDG_DATA_HOME");
+  if (
+    Deno.build.os !== "darwin" || !xdg || Deno.env.get("DEXCOM_MCP_KV_PATH")
+  ) {
+    return "";
+  }
+  const legacy = `${xdg}/dexcom-mcp/dexcom-mcp.kv`;
+  try {
+    await Deno.stat(legacy);
+  } catch {
+    return "";
+  }
+  return ` A sign-in from an older version exists at ${legacy}; set DEXCOM_MCP_KV_PATH to it to keep using it.`;
 }
 
 async function openStore(): Promise<Store> {
@@ -154,6 +177,7 @@ async function runHttp(port: number, host: string): Promise<void> {
     sessions: createDexcomSessions(dexcom, store),
     accessTokenTtlMs: parseDuration("MCP_ACCESS_TOKEN_TTL", 3600),
     refreshTokenTtlMs: parseDuration("MCP_REFRESH_TOKEN_TTL", 30 * 24 * 3600),
+    refreshRetryGraceMs: REFRESH_RETRY_GRACE_MS,
   };
   const allowedOriginHostnames = (Deno.env.get("MCP_ALLOWED_ORIGINS") ??
     "localhost,127.0.0.1,[::1]").split(",").map((origin) => origin.trim())
@@ -184,7 +208,7 @@ async function runStdio(): Promise<void> {
   if (!await sessions.hasGrant(LOCAL_USER_ID)) {
     store.close();
     throw new Error(
-      "No Dexcom authorization found. Run `dexcom-mcp login` first.",
+      `No Dexcom authorization found in ${kvPath()}. Run \`dexcom-mcp login\` first.${await legacyKvHint()}`,
     );
   }
   const server = createStdioServer(sessions);

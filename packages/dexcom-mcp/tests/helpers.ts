@@ -227,6 +227,7 @@ export async function createFixture(
     sessions: createDexcomSessions(config, store),
     accessTokenTtlMs: 3600_000,
     refreshTokenTtlMs: 86_400_000,
+    refreshRetryGraceMs: 10_000,
   };
   return { ctx, store, dexcom, config, close: () => store.close() };
 }

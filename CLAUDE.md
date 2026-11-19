@@ -67,7 +67,8 @@ adapt results, and own the OAuth bridge.
   bound to the grant's `grantId`. Tokens are valid only while the family is live
   and the user's current grant has that `grantId`. Re-authorizing keeps an
   existing `grantId`; a deleted grant gets a new one, so old tokens never
-  revive. A replayed refresh token deletes its family. Records without
+  revive. A replayed refresh token deletes its family, except the same client
+  re-sending it within 10 s (a retry), which is only refused. Records without
   `familyId`/`grantId` are invalid
 - Client registrations expire after a day unless used; each token issuance
   extends them to the refresh token lifetime

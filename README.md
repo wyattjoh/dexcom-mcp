@@ -157,15 +157,28 @@ unset (it defaults to `http://localhost:3000`), and register
 | `DEXCOM_CLIENT_ID`      | Yes      | Your Dexcom app's client ID                                                                                                                                                                                                                                          |
 | `DEXCOM_CLIENT_SECRET`  | Yes      | Your Dexcom app's client secret                                                                                                                                                                                                                                      |
 | `DEXCOM_REGION`         | No       | `sandbox` (default), `us`, `eu` (EU and outside the US), or `jp`                                                                                                                                                                                                     |
-| `MCP_PUBLIC_URL`        | Option 2 | Public origin of the server, no path. Must be `https` unless it is `localhost` and the server binds to loopback                                                                                                                                                      |
+| `MCP_PUBLIC_URL`        | Option 2 | Public origin of the server, no path. Must be `https` unless it is a loopback address (`localhost`, `127.0.0.1`, `[::1]`) and the server binds to loopback                                                                                                           |
 | `DEXCOM_REDIRECT_URI`   | No       | Option 1 sign-in callback; default `http://localhost:8765/callback`                                                                                                                                                                                                  |
 | `DEXCOM_MCP_KV_PATH`    | No       | Where sign-ins are stored. Default: `~/Library/Application Support/dexcom-mcp/` (macOS), `$XDG_DATA_HOME/dexcom-mcp/` or `~/.local/share/dexcom-mcp/` (Linux), `%LOCALAPPDATA%\dexcom-mcp\` (Windows); `/data` in Docker. `dexcom-mcp login` prints the path it used |
 | `MCP_ALLOWED_ORIGINS`   | No       | Browser origins allowed to call `/mcp`; default `localhost,127.0.0.1,[::1]`                                                                                                                                                                                          |
 | `MCP_ACCESS_TOKEN_TTL`  | No       | Lifetime of tokens given to MCP clients, in seconds (default 3600)                                                                                                                                                                                                   |
-| `MCP_REFRESH_TOKEN_TTL` | No       | Lifetime of MCP refresh tokens, in seconds (default 30 days)                                                                                                                                                                                                         |
+| `MCP_REFRESH_TOKEN_TTL` | No       | How long a client stays signed in after approving access, in seconds (default 30 days). Refreshing does not extend it; the user approves again afterwards                                                                                                            |
 
 Variables can also go in a `.env` file in the directory you start the server
 from.
+
+## Upgrading from 0.1.0
+
+- Hosted servers (Option 2): MCP clients connected under 0.1.0 must sign in
+  again once, because tokens are now tracked per sign-in so a leaked refresh
+  token can be revoked.
+- `dexcom_get_egvs` returns compact records (`systemTime`, `displayTime`,
+  `value`, `status`, `trend`, `trendRate`) instead of the full Dexcom response.
+- `MCP_PUBLIC_URL` must be `https` unless it is a loopback address, even when
+  the server binds to `127.0.0.1` behind a proxy.
+- macOS: `XDG_DATA_HOME` is no longer used. If you had it set when you ran
+  `dexcom-mcp login`, run `login` again or set `DEXCOM_MCP_KV_PATH` to the old
+  file.
 
 ## Privacy and security
 

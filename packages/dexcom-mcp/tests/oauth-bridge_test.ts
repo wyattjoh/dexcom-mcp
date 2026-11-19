@@ -14,10 +14,12 @@ function newVerifier(): string {
   return encodeBase64Url(crypto.getRandomValues(new Uint8Array(32)));
 }
 
-async function setup(): Promise<{ fx: Fixture; http: HttpHandler }> {
+async function setup(
+  overrides: Partial<Fixture["ctx"]> = {},
+): Promise<{ fx: Fixture; http: HttpHandler }> {
   const fx = await createFixture();
   const http = createHttpHandler({
-    ctx: fx.ctx,
+    ctx: { ...fx.ctx, ...overrides },
     allowedOriginHostnames: ["localhost"],
     allowInsecureIssuer: true,
   });
@@ -473,8 +475,33 @@ Deno.test("oversized streamed bodies are rejected without buffering them", async
   }
 });
 
-Deno.test("a replayed refresh token revokes its whole token family", async () => {
+Deno.test("a refresh retry by the same client keeps the new tokens valid", async () => {
   const { fx, http } = await setup();
+  try {
+    const clientId = await register(http);
+    const first = await newTokens(http, clientId);
+    const [a, b] = await Promise.all([
+      refreshWith(http, clientId, first.refresh_token),
+      refreshWith(http, clientId, first.refresh_token),
+    ]);
+    const statuses = [a.status, b.status].sort();
+    assertEquals(statuses, [200, 400]);
+    const winner = await (a.status === 200 ? a : b).json();
+    await (a.status === 200 ? b : a).body?.cancel();
+    assert(await mcpStatus(http, winner.access_token) !== 401);
+    assertEquals(
+      (await refreshWith(http, clientId, winner.refresh_token)).status,
+      200,
+    );
+  } finally {
+    await http.close();
+    fx.close();
+  }
+});
+
+Deno.test("a replayed refresh token revokes its whole token family", async () => {
+  // Outside the retry grace window, as when a stolen token is used later.
+  const { fx, http } = await setup({ refreshRetryGraceMs: 0 });
   try {
     const clientId = await register(http);
     const first = await newTokens(http, clientId);

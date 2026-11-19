@@ -157,8 +157,19 @@ export async function handleToken(
     }
     const redemption = await ctx.store.takeRefreshToken(refreshToken);
     if (redemption.status === "reused") {
-      // A spent refresh token came back: it leaked. Revoke every token
-      // rotated from the same authorization (RFC 9700 section 4.14.2).
+      // The same client re-sending a token it just spent is a retry (lost
+      // response, parallel refresh), not theft: refuse it but keep the
+      // family, or the client's freshly issued tokens would die too.
+      const isRetry = redemption.clientId === clientId &&
+        Date.now() - redemption.spentAt < ctx.refreshRetryGraceMs;
+      if (isRetry) {
+        return oauthErrorResponse(
+          "invalid_grant",
+          "Refresh token was already used",
+        );
+      }
+      // Otherwise it leaked: revoke every token rotated from the same
+      // authorization (RFC 9700 section 4.14.2).
       await ctx.store.deleteFamily(redemption.familyId);
       logger.warn("Refresh token replayed; revoked its token family", {
         clientId,

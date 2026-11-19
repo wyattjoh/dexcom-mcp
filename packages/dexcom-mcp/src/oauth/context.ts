@@ -31,10 +31,21 @@ export interface BridgeContext {
    */
   readonly accessTokenTtlMs: number;
   /**
-   * MCP refresh token lifetime in milliseconds.
+   * Absolute lifetime of an MCP token family (one authorization and its
+   * refresh rotations) in milliseconds.
    */
   readonly refreshTokenTtlMs: number;
+  /**
+   * A spent refresh token re-sent by its own client within this many
+   * milliseconds is refused as a retry instead of revoking its family.
+   */
+  readonly refreshRetryGraceMs: number;
 }
+
+/**
+ * Default {@link BridgeContext.refreshRetryGraceMs}.
+ */
+export const REFRESH_RETRY_GRACE_MS = 10_000;
 
 /**
  * Path of the Dexcom redirect URI served by this server.

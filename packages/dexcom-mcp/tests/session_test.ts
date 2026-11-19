@@ -171,7 +171,7 @@ Deno.test("a waiting process uses the lease holder's rotated tokens", async () =
 });
 
 Deno.test("a rejected refresh does not delete a grant replaced meanwhile", async () => {
-  const fx = await createFixture();
+  const fx = await createFixture(100);
   try {
     await fx.store.putGrant({
       grantId: "grant-1",
@@ -181,11 +181,24 @@ Deno.test("a rejected refresh does not delete a grant replaced meanwhile", async
       accessTokenExpiresAt: Date.now() - 1000,
       updatedAt: Date.now(),
     });
-    const loaded = await fx.store.getGrant("u");
-    assert(loaded);
-    await fx.store.putGrant({ ...loaded.grant, refreshToken: "newer" });
-    assertEquals(await fx.store.deleteGrantIf("u", loaded.versionstamp), false);
-    assertEquals((await fx.store.getGrant("u"))?.grant.refreshToken, "newer");
+    const call = fx.ctx.sessions.withAuth("u", (auth) => getDevices(auth));
+    // While Dexcom is rejecting "dead", a writer outside the lease (say an
+    // older version) stores working tokens.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    fx.dexcom.validAccessTokens.add("fresh-access");
+    await fx.store.putGrant({
+      grantId: "grant-1",
+      userId: "u",
+      accessToken: "fresh-access",
+      refreshToken: "fresh-refresh",
+      accessTokenExpiresAt: Date.now() + 3600_000,
+      updatedAt: Date.now(),
+    });
+    await call;
+    assertEquals(
+      (await fx.store.getGrant("u"))?.grant.refreshToken,
+      "fresh-refresh",
+    );
   } finally {
     fx.close();
   }

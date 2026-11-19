@@ -20,18 +20,22 @@ Deno.test("login stores the local grant from the loopback callback", async () =>
   });
   const store = createKvStore(await Deno.openKv(":memory:"));
   try {
-    let callbackStatus = 0;
+    let browser: Promise<number> | undefined;
     await runLogin(config, store, (loginUrl) => {
       const state = new URL(loginUrl).searchParams.get("state");
       // Simulate the browser returning from Dexcom.
-      setTimeout(async () => {
-        const response = await fetch(
-          `http://127.0.0.1:${port}/callback?code=dexcom-code&state=${state}`,
-        );
-        callbackStatus = response.status;
-        await response.body?.cancel();
-      }, 10);
+      browser = new Promise((resolve) => setTimeout(resolve, 10)).then(
+        async () => {
+          const response = await fetch(
+            `http://127.0.0.1:${port}/callback?code=dexcom-code&state=${state}`,
+          );
+          await response.body?.cancel();
+          return response.status;
+        },
+      );
     });
+    // The browser must receive the success page, not a dropped connection.
+    const callbackStatus = await browser;
     const grant = await store.getGrant(LOCAL_USER_ID);
     assertEquals(grant?.grant.refreshToken, "dex-refresh-1");
     assertEquals(callbackStatus, 200);

@@ -1,109 +1,211 @@
-# dexcom-mcp
+# Dexcom MCP
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server for the
-[Dexcom API v3](https://developer.dexcom.com/docs/dexcomv3/endpoint-overview),
-with read-only tools for CGM data.
+[![JSR](https://jsr.io/badges/@wyattjoh/dexcom-mcp)](https://jsr.io/@wyattjoh/dexcom-mcp)
+[![JSR](https://jsr.io/badges/@wyattjoh/dexcom)](https://jsr.io/@wyattjoh/dexcom)
 
-In HTTP mode, the server is an OAuth 2.1 authorization server for MCP clients
-that bridges to Dexcom's OAuth. Users connect the MCP server, approve access,
-sign in at Dexcom, and their client gets an opaque MCP token. Dexcom tokens stay
-on the server (as Dexcom requires) and are refreshed automatically.
+Connect Claude and other [MCP](https://modelcontextprotocol.io) clients to your
+Dexcom CGM data. Ask questions like "how was my time in range last week?" or
+"when did I go low overnight?" and the assistant reads your glucose readings,
+events, and alerts from the official [Dexcom API](https://developer.dexcom.com).
 
-## Packages
+Access is read-only. You sign in with Dexcom yourself, and your Dexcom login and
+tokens never reach the AI client.
 
-- [`@wyattjoh/dexcom`](packages/dexcom): functional Dexcom API client (OAuth
-  helpers, EGVs, events, calibrations, alerts, devices, data range)
-- [`@wyattjoh/dexcom-mcp`](packages/dexcom-mcp): the MCP server
+## What you can ask about
 
-## Tools
+| Tool                      | What it returns                                                      |
+| ------------------------- | -------------------------------------------------------------------- |
+| `dexcom_get_data_range`   | The earliest and latest data available                               |
+| `dexcom_get_egvs`         | Glucose readings (mg/dL, optionally mmol/L) with trend arrows        |
+| `dexcom_glucose_summary`  | Average glucose, GMI (estimated A1c), variability, and time in range |
+| `dexcom_get_events`       | Carbs, insulin, exercise, and health events you logged               |
+| `dexcom_get_calibrations` | Fingerstick calibrations                                             |
+| `dexcom_get_alerts`       | High, low, urgent low, rise, fall, and signal-loss alerts            |
+| `dexcom_get_devices`      | Your devices and their alert settings                                |
 
-| Tool                      | Description                                                       |
-| ------------------------- | ----------------------------------------------------------------- |
-| `dexcom_get_data_range`   | Earliest/latest available EGV, event, and calibration times       |
-| `dexcom_get_egvs`         | CGM readings (mg/dL, optional mmol/L) with trends, ≤30-day window |
-| `dexcom_glucose_summary`  | Mean, GMI, SD/CV, time in consensus ranges, ≤30-day window        |
-| `dexcom_get_events`       | User-entered carbs, insulin, exercise, health events              |
-| `dexcom_get_calibrations` | Fingerstick calibrations                                          |
-| `dexcom_get_alerts`       | High/low/urgent-low/rise/fall/no-reading alerts                   |
-| `dexcom_get_devices`      | Devices, transmitters, alert schedules and thresholds             |
+Each request covers up to 30 days. Dexcom delays app data by about 1 hour in the
+US and 3 hours elsewhere, so the newest readings may not show up yet.
 
-Query windows are UTC, inclusive of `startDate`, exclusive of `endDate`, and
-limited to 30 days. Dexcom delays mobile-app data by 1 hour in the US and 3
-hours elsewhere.
+## Before you start
 
-## Setup
+1. Install [Deno](https://docs.deno.com/runtime/getting_started/installation/)
+   2.x.
+2. Create a free developer account and app at
+   [developer.dexcom.com](https://developer.dexcom.com). Note the **Client ID**
+   and **Client Secret**.
+3. Add a **redirect URI** to the app. Which one depends on how you run the
+   server (below).
 
-1. Register an app at <https://developer.dexcom.com> and note its client ID and
-   secret.
-2. Add redirect URIs to the app:
-   - HTTP mode: `{MCP_PUBLIC_URL}/oauth/dexcom/callback`
-   - Stdio mode: `DEXCOM_REDIRECT_URI` (default
-     `http://localhost:8765/callback`)
-3. Copy `.env.example` to `.env` and fill it in. Start with
-   `DEXCOM_REGION=sandbox`.
+New Dexcom apps start in the **sandbox**, which serves sample data and doesn't
+need a real Dexcom password. To read your own data, request production access
+from Dexcom and set `DEXCOM_REGION` to `us`, `eu`, or `jp`.
 
-### HTTP (remote, multi-user)
+## Option 1: Run it on your computer (one user)
+
+Use this with Claude Code, Claude Desktop, or any client that launches MCP
+servers locally.
+
+1. Add `http://localhost:8765/callback` as a redirect URI in your Dexcom app.
+
+2. Install the command:
+
+   ```bash
+   deno install --global --name dexcom-mcp --unstable-kv --allow-net --allow-env --allow-read --allow-write --allow-run jsr:@wyattjoh/dexcom-mcp
+   ```
+
+3. Sign in with Dexcom. A browser window opens; approve access and close it when
+   it says you're connected.
+
+   ```bash
+   DEXCOM_CLIENT_ID=your-id DEXCOM_CLIENT_SECRET=your-secret DEXCOM_REGION=sandbox \
+     dexcom-mcp login
+   ```
+
+4. Add the server to your MCP client.
+
+   **Claude Code**
+
+   ```bash
+   claude mcp add dexcom \
+     -e DEXCOM_CLIENT_ID=your-id \
+     -e DEXCOM_CLIENT_SECRET=your-secret \
+     -e DEXCOM_REGION=sandbox \
+     -- dexcom-mcp
+   ```
+
+   **Claude Desktop** (`claude_desktop_config.json`), or any client that takes a
+   JSON config:
+
+   ```json
+   {
+     "mcpServers": {
+       "dexcom": {
+         "command": "deno",
+         "args": [
+           "run",
+           "--unstable-kv",
+           "--allow-net",
+           "--allow-env",
+           "--allow-read",
+           "--allow-write",
+           "--allow-run",
+           "jsr:@wyattjoh/dexcom-mcp"
+         ],
+         "env": {
+           "DEXCOM_CLIENT_ID": "your-id",
+           "DEXCOM_CLIENT_SECRET": "your-secret",
+           "DEXCOM_REGION": "sandbox"
+         }
+       }
+     }
+   }
+   ```
+
+Your Dexcom sign-in is saved in a local database and refreshed automatically. It
+lasts up to a year, or until you revoke access at dexcom.com. Run
+`dexcom-mcp login` again if the assistant reports that authorization is missing.
+
+## Option 2: Host it for remote clients (many users)
+
+In this mode the server is a remote MCP server with its own OAuth sign-in, for
+clients that connect by URL (Claude connectors, for example). Each person who
+connects approves access, signs in with Dexcom, and only sees their own data.
+
+1. Choose the public HTTPS address the server will have, e.g.
+   `https://dexcom.example.com`.
+2. Add `https://dexcom.example.com/oauth/dexcom/callback` as a redirect URI in
+   your Dexcom app.
+3. Start the server behind your HTTPS proxy:
+
+   ```bash
+   DEXCOM_CLIENT_ID=your-id \
+   DEXCOM_CLIENT_SECRET=your-secret \
+   DEXCOM_REGION=us \
+   MCP_PUBLIC_URL=https://dexcom.example.com \
+     deno run --unstable-kv --allow-net --allow-env --allow-read --allow-write --allow-run jsr:@wyattjoh/dexcom-mcp --http --host 0.0.0.0 --port 3000
+   ```
+
+   Or with Docker:
+
+   ```bash
+   docker build -t dexcom-mcp https://github.com/wyattjoh/dexcom-mcp.git
+   docker run -d -p 3000:3000 -v dexcom-data:/data \
+     -e DEXCOM_CLIENT_ID=your-id -e DEXCOM_CLIENT_SECRET=your-secret \
+     -e DEXCOM_REGION=us -e MCP_PUBLIC_URL=https://dexcom.example.com \
+     dexcom-mcp
+   ```
+
+4. In your MCP client, add the server URL `https://dexcom.example.com/mcp`. The
+   client opens a consent page, then Dexcom's sign-in.
+
+To try it locally first, run with `--host 127.0.0.1`, leave `MCP_PUBLIC_URL`
+unset (it defaults to `http://localhost:3000`), and register
+`http://localhost:3000/oauth/dexcom/callback` with Dexcom.
+
+## Configuration
+
+| Variable                | Required | Description                                                                                                                                                                              |
+| ----------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DEXCOM_CLIENT_ID`      | Yes      | Your Dexcom app's client ID                                                                                                                                                              |
+| `DEXCOM_CLIENT_SECRET`  | Yes      | Your Dexcom app's client secret                                                                                                                                                          |
+| `DEXCOM_REGION`         | No       | `sandbox` (default), `us`, `eu` (EU and outside the US), or `jp`                                                                                                                         |
+| `MCP_PUBLIC_URL`        | Option 2 | Public origin of the server, no path. Must be `https` unless bound to localhost                                                                                                          |
+| `DEXCOM_REDIRECT_URI`   | No       | Option 1 sign-in callback; default `http://localhost:8765/callback`                                                                                                                      |
+| `DEXCOM_MCP_KV_PATH`    | No       | Where sign-ins are stored. Default: `~/Library/Application Support/dexcom-mcp/` (macOS), `~/.local/share/dexcom-mcp/` (Linux), `%LOCALAPPDATA%\dexcom-mcp\` (Windows); `/data` in Docker |
+| `MCP_ALLOWED_ORIGINS`   | No       | Browser origins allowed to call `/mcp`; default `localhost,127.0.0.1,[::1]`                                                                                                              |
+| `MCP_ACCESS_TOKEN_TTL`  | No       | Lifetime of tokens given to MCP clients, in seconds (default 3600)                                                                                                                       |
+| `MCP_REFRESH_TOKEN_TTL` | No       | Lifetime of MCP refresh tokens, in seconds (default 30 days)                                                                                                                             |
+
+Variables can also go in a `.env` file in the directory you start the server
+from.
+
+## Privacy and security
+
+- The server only reads data. It cannot change anything in your Dexcom account.
+- Dexcom tokens are stored on the machine running the server and are never sent
+  to MCP clients. Clients get separate tokens that only work through this
+  server.
+- Revoke access anytime at [dexcom.com](https://www.dexcom.com) under your
+  account's authorized apps. The server then asks you to sign in again.
+- Keep your client secret private. If it leaks, regenerate it in the Dexcom
+  developer portal.
+
+## Troubleshooting
+
+- **"No Dexcom authorization found"**: run `dexcom-mcp login` with the same
+  `DEXCOM_MCP_KV_PATH` the server uses.
+- **Dexcom says the redirect URI is invalid**: the URI registered in your Dexcom
+  app must match exactly, including port and path.
+- **No recent readings**: Dexcom delays app uploads by 1 to 3 hours. Ask for the
+  data range to see what's available.
+- **Readings from the sandbox look fake**: they are. Switch `DEXCOM_REGION`
+  after Dexcom grants production access.
+
+## Using the API client directly
+
+[`@wyattjoh/dexcom`](packages/dexcom) is the Dexcom API client this server is
+built on, published separately:
 
 ```bash
-deno task start:http --port 3000 --host 127.0.0.1   # local
-MCP_PUBLIC_URL=https://dexcom.example.com deno task start:http --host 0.0.0.0
-```
-
-Point an MCP client at `{MCP_PUBLIC_URL}/mcp`. It will discover the
-authorization server, register dynamically, and open the consent page.
-
-| Endpoint                                    | Purpose                                                     |
-| ------------------------------------------- | ----------------------------------------------------------- |
-| `/.well-known/oauth-protected-resource/mcp` | RFC 9728 resource metadata                                  |
-| `/.well-known/oauth-authorization-server`   | RFC 8414 server metadata                                    |
-| `POST /register`                            | RFC 7591 dynamic client registration (public clients, PKCE) |
-| `GET/POST /authorize`                       | Consent page, then redirect to Dexcom login                 |
-| `GET /oauth/dexcom/callback`                | Dexcom redirect; exchanges the code server-side             |
-| `POST /token`                               | `authorization_code` (PKCE S256) and `refresh_token` grants |
-| `POST /mcp`                                 | Bearer-protected Streamable HTTP MCP endpoint               |
-| `GET /health`                               | Health check                                                |
-
-On a non-loopback host, `MCP_PUBLIC_URL` must be https.
-
-### Stdio (local, single user)
-
-```bash
-deno task login   # opens Dexcom login, stores the grant in Deno KV
-deno task start   # serves MCP on stdio
-```
-
-MCP clients launch the server from their own working directory, so `.env` in
-this repo isn't read. Pass the credentials explicitly. Claude Code example:
-
-```bash
-claude mcp add dexcom \
-  -e DEXCOM_CLIENT_ID=... -e DEXCOM_CLIENT_SECRET=... -e DEXCOM_REGION=sandbox \
-  -- deno run --unstable-kv -A /path/to/dexcom-mcp/packages/dexcom-mcp/src/index.ts
-```
-
-Grants live in Deno KV at `DEXCOM_MCP_KV_PATH`. By default that's a per-user
-data directory (`~/Library/Application Support/dexcom-mcp/` on macOS,
-`$XDG_DATA_HOME` or `~/.local/share/dexcom-mcp/` on Linux,
-`%LOCALAPPDATA%\dexcom-mcp\` on Windows), so `login` and the stdio server share
-it regardless of the working directory.
-
-### Docker
-
-```bash
-docker build -t dexcom-mcp .
-docker run -p 3000:3000 -v dexcom-data:/data --env-file .env \
-  -e MCP_PUBLIC_URL=https://dexcom.example.com dexcom-mcp
+deno add jsr:@wyattjoh/dexcom
 ```
 
 ## Development
 
 ```bash
-deno task check
-deno task lint
-deno task fmt
-deno task test
+git clone https://github.com/wyattjoh/dexcom-mcp.git && cd dexcom-mcp
+cp .env.example .env
+deno task test          # unit and integration tests (fake Dexcom, no credentials needed)
+deno task check && deno task lint && deno fmt --check
+deno task dev:http      # local HTTP server with reload
+deno task login && deno task start   # stdio from source
 ```
+
+Releases are automated with
+[release-please](https://github.com/googleapis/release-please): merging the
+release PR publishes both packages to JSR. Use
+[Conventional Commits](https://www.conventionalcommits.org/).
 
 ## License
 
-MIT
+MIT. Not affiliated with or endorsed by Dexcom, Inc.

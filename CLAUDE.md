@@ -76,6 +76,14 @@ See `.env.example`. Required: `DEXCOM_CLIENT_ID`, `DEXCOM_CLIENT_SECRET`. HTTP:
 (loopback). Optional: `DEXCOM_REGION`, `DEXCOM_BASE_URL`, `DEXCOM_MCP_KV_PATH`,
 `MCP_ALLOWED_ORIGINS`, `MCP_ACCESS_TOKEN_TTL`, `MCP_REFRESH_TOKEN_TTL`.
 
+## Releases
+
+release-please (`release-please-config.json`, `.release-please-manifest.json`)
+versions both packages from Conventional Commits and bumps each `deno.json`
+version. Merging the release PR runs `.github/workflows/release.yml`, which
+publishes to JSR with GitHub OIDC (`deno publish`). Human-facing docs use
+`jsr:@wyattjoh/dexcom-mcp`; keep them in sync with CLI flags and env vars.
+
 ## Reference
 
 The Dexcom OpenAPI bundle is at

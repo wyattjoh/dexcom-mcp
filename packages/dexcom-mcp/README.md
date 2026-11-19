@@ -1,14 +1,46 @@
 # @wyattjoh/dexcom-mcp
 
-MCP server for the Dexcom API with an OAuth bridge. See the
-[repository README](https://github.com/wyattjoh/dexcom-mcp#readme) for setup.
+An [MCP](https://modelcontextprotocol.io) server that gives Claude and other AI
+clients read-only access to your Dexcom CGM data: glucose readings, time in
+range, events, alerts, and devices.
 
-| Tool                      | Description                                                       |
-| ------------------------- | ----------------------------------------------------------------- |
-| `dexcom_get_data_range`   | Earliest/latest available EGV, event, and calibration times       |
-| `dexcom_get_egvs`         | CGM readings (mg/dL, optional mmol/L) with trends, ≤30-day window |
-| `dexcom_glucose_summary`  | Mean, GMI, SD/CV, time in consensus ranges, ≤30-day window        |
-| `dexcom_get_events`       | User-entered carbs, insulin, exercise, health events              |
-| `dexcom_get_calibrations` | Fingerstick calibrations                                          |
-| `dexcom_get_alerts`       | High/low/urgent-low/rise/fall/no-reading alerts                   |
-| `dexcom_get_devices`      | Devices, transmitters, alert schedules and thresholds             |
+You sign in with Dexcom yourself; your Dexcom tokens stay on the machine running
+the server.
+
+## Quick start (local)
+
+Create an app at [developer.dexcom.com](https://developer.dexcom.com) and add
+`http://localhost:8765/callback` as a redirect URI. Then:
+
+```bash
+deno install --global --name dexcom-mcp --unstable-kv --allow-net --allow-env --allow-read --allow-write --allow-run jsr:@wyattjoh/dexcom-mcp
+
+DEXCOM_CLIENT_ID=your-id DEXCOM_CLIENT_SECRET=your-secret dexcom-mcp login
+
+claude mcp add dexcom -e DEXCOM_CLIENT_ID=your-id -e DEXCOM_CLIENT_SECRET=your-secret -- dexcom-mcp
+```
+
+## Hosted (remote MCP with OAuth)
+
+```bash
+MCP_PUBLIC_URL=https://dexcom.example.com DEXCOM_CLIENT_ID=... DEXCOM_CLIENT_SECRET=... \
+  deno run --unstable-kv --allow-net --allow-env --allow-read --allow-write --allow-run jsr:@wyattjoh/dexcom-mcp --http --host 0.0.0.0
+```
+
+Register `https://dexcom.example.com/oauth/dexcom/callback` with Dexcom and
+connect clients to `https://dexcom.example.com/mcp`.
+
+See the [full guide](https://github.com/wyattjoh/dexcom-mcp#readme) for Claude
+Desktop setup, Docker, configuration, and troubleshooting.
+
+## Tools
+
+| Tool                      | What it returns                                  |
+| ------------------------- | ------------------------------------------------ |
+| `dexcom_get_data_range`   | The earliest and latest data available           |
+| `dexcom_get_egvs`         | Glucose readings with trend arrows               |
+| `dexcom_glucose_summary`  | Average glucose, GMI, variability, time in range |
+| `dexcom_get_events`       | Logged carbs, insulin, exercise, health events   |
+| `dexcom_get_calibrations` | Fingerstick calibrations                         |
+| `dexcom_get_alerts`       | Glucose alerts                                   |
+| `dexcom_get_devices`      | Devices and alert settings                       |

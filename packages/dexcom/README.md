@@ -1,6 +1,13 @@
 # @wyattjoh/dexcom
 
-Functional client for the [Dexcom API v3](https://developer.dexcom.com).
+Functional client for the [Dexcom API v3](https://developer.dexcom.com): OAuth
+helpers plus read-only access to glucose readings (EGVs), events, calibrations,
+alerts, devices, and data ranges. Used by
+[`@wyattjoh/dexcom-mcp`](https://jsr.io/@wyattjoh/dexcom-mcp).
+
+```bash
+deno add jsr:@wyattjoh/dexcom
+```
 
 ```ts
 import {
@@ -28,3 +35,7 @@ const egvs = await getEgvs(
 
 Refresh tokens are single use: persist the token returned by `refreshTokens`
 before using the new access token.
+
+Requests are limited to 30-day windows (`validateWindow` enforces this).
+Regions: `us`, `eu`, `jp`, and `sandbox`; the login, token, and data calls must
+use the same one.

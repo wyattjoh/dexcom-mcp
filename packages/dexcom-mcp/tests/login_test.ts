@@ -7,7 +7,10 @@ import { createFakeDexcom } from "./helpers.ts";
 
 Deno.test("login stores the local grant from the loopback callback", async () => {
   const dexcom = createFakeDexcom();
-  const port = 20000 + Math.floor(Math.random() * 20000);
+  // Reserve a free port from the OS, then hand it to the login server.
+  const probe = Deno.listen({ hostname: "127.0.0.1", port: 0 });
+  const port = (probe.addr as Deno.NetAddr).port;
+  probe.close();
   const config = createDexcomConfig({
     region: "sandbox",
     clientId: "client",

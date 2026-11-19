@@ -46,12 +46,33 @@ function loadDexcomConfig(redirectUri: string): DexcomConfig {
   });
 }
 
-async function openStore(): Promise<Store> {
-  const path = Deno.env.get("DEXCOM_MCP_KV_PATH") ?? "./data/dexcom-mcp.kv";
-  if (path !== ":memory:" && !path.startsWith("http")) {
-    const dir = path.split("/").slice(0, -1).join("/");
-    if (dir) await Deno.mkdir(dir, { recursive: true });
+/**
+ * Default KV location: a per-user data directory, so stdio servers launched by
+ * MCP clients from any working directory find the grant stored by `login`.
+ */
+function defaultKvPath(): string {
+  const home = Deno.env.get("HOME") ?? Deno.env.get("USERPROFILE");
+  const base = Deno.env.get("XDG_DATA_HOME") ??
+    (Deno.build.os === "windows"
+      ? Deno.env.get("LOCALAPPDATA")
+      : home && (Deno.build.os === "darwin"
+        ? `${home}/Library/Application Support`
+        : `${home}/.local/share`));
+  if (!base) {
+    throw new Error(
+      "Cannot determine a data directory; set DEXCOM_MCP_KV_PATH",
+    );
   }
+  return `${base}/dexcom-mcp/dexcom-mcp.kv`;
+}
+
+async function openStore(): Promise<Store> {
+  const path = Deno.env.get("DEXCOM_MCP_KV_PATH") ?? defaultKvPath();
+  if (path !== ":memory:" && !/^https?:/.test(path)) {
+    const dir = path.replace(/[\\/][^\\/]*$/, "");
+    if (dir && dir !== path) await Deno.mkdir(dir, { recursive: true });
+  }
+  getLogger(["dexcom-mcp"]).debug("Opening KV at {path}", { path });
   return createKvStore(await Deno.openKv(path));
 }
 
@@ -88,6 +109,11 @@ async function runHttp(port: number, host: string): Promise<void> {
   const publicUrl = new URL(
     Deno.env.get("MCP_PUBLIC_URL") ?? `http://localhost:${port}`,
   );
+  if (publicUrl.pathname !== "/" || publicUrl.search || publicUrl.hash) {
+    throw new Error(
+      "MCP_PUBLIC_URL must be an origin without a path (serve the bridge at the root of its host)",
+    );
+  }
   if (publicUrl.protocol !== "https:" && !isLoopback) {
     throw new Error(
       "MCP_PUBLIC_URL must be an https URL when binding to a non-loopback host. Use --host 127.0.0.1 for local development.",

@@ -28,6 +28,10 @@ export interface FakeDexcom {
    * Requests seen, as "METHOD /path".
    */
   calls: string[];
+  /**
+   * When set, refresh requests fail with this status.
+   */
+  refreshFailureStatus: number | undefined;
 }
 
 const USER_ID = "dexcom-user-1";
@@ -78,6 +82,11 @@ export function createFakeDexcom(refreshDelayMs = 0): FakeDexcom {
           return Response.json({ error: "invalid_grant" }, { status: 400 });
         }
         return issue();
+      }
+      if (fake.refreshFailureStatus !== undefined) {
+        return Response.json({ error: "temporarily_unavailable" }, {
+          status: fake.refreshFailureStatus,
+        });
       }
       const token = form.get("refresh_token") ?? "";
       if (refreshDelayMs) {
@@ -152,13 +161,15 @@ export function createFakeDexcom(refreshDelayMs = 0): FakeDexcom {
     }
   };
 
-  return {
+  const fake: FakeDexcom = {
     fetch: fakeFetch as typeof fetch,
     validAccessTokens,
     validRefreshTokens,
     refreshCount: () => refreshes,
     calls,
+    refreshFailureStatus: undefined,
   };
+  return fake;
 }
 
 /**

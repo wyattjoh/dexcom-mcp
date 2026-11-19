@@ -140,9 +140,10 @@ export function createDexcomSessions(
     try {
       tokens = await refreshTokens(config, grant.refreshToken);
     } catch (error) {
-      if (
-        isDexcomApiError(error) && error.status >= 400 && error.status < 500
-      ) {
+      // Dexcom documents 400 as "this refresh token is no longer valid".
+      // Other statuses (429 rate limit, 401 bad client secret, 5xx) must not
+      // destroy users' grants.
+      if (isDexcomApiError(error) && error.status === 400) {
         const current = await store.getGrant(userId);
         if (current && current.grant.refreshToken !== grant.refreshToken) {
           // Lost a race with another process; its rotation is valid.

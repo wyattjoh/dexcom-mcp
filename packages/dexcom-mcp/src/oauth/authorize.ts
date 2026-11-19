@@ -2,10 +2,14 @@ import { buildLoginUrl } from "@wyattjoh/dexcom";
 import { randomToken, sha256, timingSafeEqualString } from "../crypto.ts";
 import type { AuthorizationRequest } from "../store.ts";
 import {
+  bindingCookie,
   type BridgeContext,
+  CALLBACK_COOKIE,
+  DEXCOM_CALLBACK_PATH,
   errorPage,
   escapeHtml,
   htmlResponse,
+  readCookie,
   readForm,
   redirectToClient,
 } from "./context.ts";
@@ -95,20 +99,6 @@ async function parseAuthorization(
   };
 }
 
-function cookieAttributes(ctx: BridgeContext): string {
-  const secure = ctx.issuer.startsWith("https:") ? "; Secure" : "";
-  return `Path=/authorize; HttpOnly; SameSite=Strict; Max-Age=600${secure}`;
-}
-
-function readCookie(request: Request, name: string): string | undefined {
-  const header = request.headers.get("cookie") ?? "";
-  for (const part of header.split(";")) {
-    const [key, ...rest] = part.trim().split("=");
-    if (key === name) return rest.join("=");
-  }
-  return undefined;
-}
-
 /**
  * GET /authorize: validates the MCP client's request and renders a consent
  * page. Consent is bound to a cookie so an attacker cannot trick a victim
@@ -152,7 +142,13 @@ export async function handleAuthorizeGet(
 </div>
 </form>`;
   return htmlResponse("Connect Dexcom", body, 200, {
-    "Set-Cookie": `${CONSENT_COOKIE}=${binding}; ${cookieAttributes(ctx)}`,
+    "Set-Cookie": bindingCookie(
+      ctx,
+      CONSENT_COOKIE,
+      binding,
+      "/authorize",
+      "Strict",
+    ),
   });
 }
 
@@ -190,9 +186,13 @@ export async function handleAuthorizePost(
     );
   }
 
-  const clearCookie = `${CONSENT_COOKIE}=; ${
-    cookieAttributes(ctx).replace("Max-Age=600", "Max-Age=0")
-  }`;
+  const clearCookie = bindingCookie(
+    ctx,
+    CONSENT_COOKIE,
+    "",
+    "/authorize",
+    "Strict",
+  );
   const { browserBindingHash: _hash, ...authorization } = consent;
 
   if (form.get("action") !== "approve") {
@@ -205,14 +205,28 @@ export async function handleAuthorizePost(
     return response;
   }
 
+  // Bind the upstream state to this browser so a Dexcom login URL lured to
+  // another user cannot complete this client's authorization.
   const upstreamState = randomToken();
-  await ctx.store.putPendingUpstream(upstreamState, authorization);
-  return new Response(null, {
-    status: 302,
-    headers: {
-      Location: buildLoginUrl(ctx.dexcom, upstreamState).href,
-      "Cache-Control": "no-store",
-      "Set-Cookie": clearCookie,
-    },
+  const callbackBinding = randomToken();
+  await ctx.store.putPendingUpstream(upstreamState, {
+    ...authorization,
+    browserBindingHash: await sha256(callbackBinding),
   });
+  const headers = new Headers({
+    Location: buildLoginUrl(ctx.dexcom, upstreamState).href,
+    "Cache-Control": "no-store",
+  });
+  headers.append("Set-Cookie", clearCookie);
+  headers.append(
+    "Set-Cookie",
+    bindingCookie(
+      ctx,
+      CALLBACK_COOKIE,
+      callbackBinding,
+      DEXCOM_CALLBACK_PATH,
+      "Lax",
+    ),
+  );
+  return new Response(null, { status: 302, headers });
 }

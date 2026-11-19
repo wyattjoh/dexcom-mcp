@@ -106,6 +106,50 @@ export function redirectToClient(
 }
 
 /**
+ * Reads a cookie value from a request.
+ *
+ * @param request - Incoming request.
+ * @param name - Cookie name.
+ * @returns The value, or undefined.
+ */
+export function readCookie(request: Request, name: string): string | undefined {
+  const header = request.headers.get("cookie") ?? "";
+  for (const part of header.split(";")) {
+    const [key, ...rest] = part.trim().split("=");
+    if (key === name) return rest.join("=");
+  }
+  return undefined;
+}
+
+/**
+ * Builds a Set-Cookie value for a short-lived, HttpOnly browser binding.
+ *
+ * @param ctx - Bridge context (decides the Secure flag).
+ * @param name - Cookie name.
+ * @param value - Cookie value; empty to clear.
+ * @param path - Cookie path.
+ * @param sameSite - SameSite mode.
+ * @returns The header value.
+ */
+export function bindingCookie(
+  ctx: Pick<BridgeContext, "issuer">,
+  name: string,
+  value: string,
+  path: string,
+  sameSite: "Strict" | "Lax",
+): string {
+  const secure = ctx.issuer.startsWith("https:") ? "; Secure" : "";
+  const maxAge = value ? 600 : 0;
+  return `${name}=${value}; Path=${path}; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAge}${secure}`;
+}
+
+/**
+ * Cookie binding the Dexcom callback to the browser that gave consent.
+ * SameSite=Lax because the callback arrives as a cross-site redirect.
+ */
+export const CALLBACK_COOKIE = "dexcom_mcp_callback";
+
+/**
  * Reads an application/x-www-form-urlencoded body, capped at 64 KiB.
  *
  * @param request - Incoming request.

@@ -48,10 +48,13 @@ async function register(http: HttpHandler): Promise<string> {
 /**
  * Drives the full browser flow and returns the MCP authorization code.
  */
+let lastCallback: { upstreamState: string; callbackCookie: string } | undefined;
+
 async function authorize(
   http: HttpHandler,
   clientId: string,
   verifier: string,
+  withCallback = true,
 ): Promise<URL> {
   const params = new URLSearchParams({
     client_id: clientId,
@@ -87,11 +90,18 @@ async function authorize(
     `${BASE}/oauth/dexcom/callback`,
   );
   const upstreamState = login.searchParams.get("state")!;
+  const callbackCookie = approved.headers.getSetCookie()
+    .find((value) => value.startsWith("dexcom_mcp_callback="))
+    ?.split(";")[0];
+  assert(callbackCookie, "callback binding cookie missing");
+  lastCallback = { upstreamState, callbackCookie };
 
   // Simulate Dexcom redirecting the browser back.
+  if (!withCallback) return undefined as unknown as URL;
   const callback = await call(
     http,
     `/oauth/dexcom/callback?code=dexcom-code&state=${upstreamState}`,
+    { headers: { Cookie: callbackCookie } },
   );
   assertEquals(callback.status, 302);
   return new URL(callback.headers.get("location")!);
@@ -119,8 +129,11 @@ async function exchange(
 async function connectClient(
   http: HttpHandler,
   accessToken: string,
+  mode: "legacy" | "auto" = "legacy",
 ): Promise<Client> {
-  const client = new Client({ name: "test", version: "1.0.0" });
+  const client = new Client({ name: "test", version: "1.0.0" }, {
+    versionNegotiation: { mode },
+  });
   const transport = new StreamableHTTPClientTransport(new URL(`${BASE}/mcp`), {
     fetch: (input, init) => http.fetch(new Request(input, init)),
     requestInit: { headers: { Authorization: `Bearer ${accessToken}` } },
@@ -326,6 +339,51 @@ Deno.test("upstream 401 refreshes once and retries; revoked grant forces re-auth
       body: "{}",
     });
     assertEquals(after.status, 401);
+  } finally {
+    await http.close();
+    fx.close();
+  }
+});
+
+Deno.test("Dexcom callback from another browser is refused", async () => {
+  const { fx, http } = await setup();
+  try {
+    const clientId = await register(http);
+    await authorize(http, clientId, newVerifier(), false);
+    const { upstreamState } = lastCallback!;
+    // A victim's browser lacks the attacker's binding cookie.
+    const response = await call(
+      http,
+      `/oauth/dexcom/callback?code=dexcom-code&state=${upstreamState}`,
+    );
+    assertEquals(response.status, 403);
+    assertEquals(response.headers.get("location"), null);
+    assertEquals(await fx.store.getGrant(FAKE_USER_ID), undefined);
+    assertEquals(fx.dexcom.calls.includes("POST /v3/oauth2/token"), false);
+  } finally {
+    fx.close();
+  }
+});
+
+Deno.test("modern-era clients receive authInfo and can call tools", async () => {
+  const { fx, http } = await setup();
+  try {
+    const clientId = await register(http);
+    const verifier = newVerifier();
+    const redirect = await authorize(http, clientId, verifier);
+    const tokens = await (await exchange(
+      http,
+      clientId,
+      redirect.searchParams.get("code")!,
+      verifier,
+    )).json();
+    const client = await connectClient(http, tokens.access_token, "auto");
+    const result = await client.callTool({
+      name: "dexcom_get_data_range",
+      arguments: {},
+    });
+    assert(!result.isError, JSON.stringify(result));
+    await client.close();
   } finally {
     await http.close();
     fx.close();

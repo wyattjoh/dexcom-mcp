@@ -63,14 +63,17 @@ adapt results, and own the OAuth bridge.
   hashes
 - MCP access tokens are valid only while the user's Dexcom grant exists
 - `/authorize` requires PKCE S256 and an exact registered `redirect_uri`;
-  consent is bound to a SameSite=Strict cookie
+  consent is bound to a SameSite=Strict cookie, and the Dexcom callback to a
+  SameSite=Lax cookie set on approval (so a forwarded Dexcom login URL cannot
+  complete someone else's authorization)
+- Only a Dexcom 400 on refresh deletes a grant; 429/401/5xx are rethrown
 - The same region host serves login, token, and data calls
 
 ## Environment Variables
 
 See `.env.example`. Required: `DEXCOM_CLIENT_ID`, `DEXCOM_CLIENT_SECRET`. HTTP:
-`MCP_PUBLIC_URL` (https off loopback). Stdio: `DEXCOM_REDIRECT_URI` (loopback).
-Optional: `DEXCOM_REGION`, `DEXCOM_BASE_URL`, `DEXCOM_MCP_KV_PATH`,
+`MCP_PUBLIC_URL` (origin only, https off loopback). Stdio: `DEXCOM_REDIRECT_URI`
+(loopback). Optional: `DEXCOM_REGION`, `DEXCOM_BASE_URL`, `DEXCOM_MCP_KV_PATH`,
 `MCP_ALLOWED_ORIGINS`, `MCP_ACCESS_TOKEN_TTL`, `MCP_REFRESH_TOKEN_TTL`.
 
 ## Reference

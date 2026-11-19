@@ -42,10 +42,12 @@ function page(message: string, status = 200): Response {
  *
  * @param config - Dexcom configuration; its redirect URI must be loopback.
  * @param store - Persistent store.
+ * @param openUrl - Opens the login URL; defaults to the system browser.
  */
 export async function runLogin(
   config: DexcomConfig,
   store: Store,
+  openUrl: (url: string) => void = openBrowser,
 ): Promise<void> {
   const logger = getLogger(["dexcom-mcp", "login"]);
   const redirect = new URL(config.redirectUri);
@@ -57,12 +59,10 @@ export async function runLogin(
 
   const state = randomToken();
   const { promise, resolve, reject } = Promise.withResolvers<void>();
-  const controller = new AbortController();
 
   const server = Deno.serve({
     hostname: redirect.hostname.replace(/^\[|\]$/g, ""),
     port: Number(redirect.port || 80),
-    signal: controller.signal,
     onListen: () => {},
   }, async (request) => {
     const url = new URL(request.url);
@@ -102,7 +102,7 @@ export async function runLogin(
   console.error(
     `Opening Dexcom login (${config.region}). If no browser opens, visit:\n\n  ${loginUrl}\n`,
   );
-  openBrowser(loginUrl);
+  openUrl(loginUrl);
 
   const timer = setTimeout(
     () => reject(new Error("Timed out waiting for Dexcom login (5 minutes)")),
@@ -114,7 +114,7 @@ export async function runLogin(
     console.error("Dexcom login complete. Start the server with `dexcom-mcp`.");
   } finally {
     clearTimeout(timer);
-    controller.abort();
-    await server.finished;
+    // Graceful: lets the in-flight callback response reach the browser.
+    await server.shutdown();
   }
 }

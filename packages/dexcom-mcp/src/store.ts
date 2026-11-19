@@ -50,8 +50,8 @@ export interface AuthorizationRequest {
 }
 
 /**
- * An authorization request awaiting user consent. Bound to a browser cookie
- * to prevent consent CSRF.
+ * An authorization request bound to a browser cookie: used both while
+ * awaiting consent and while waiting for the Dexcom callback.
  */
 export interface PendingConsent extends AuthorizationRequest {
   /**
@@ -159,14 +159,11 @@ export interface Store {
   /**
    * Saves an approved request until Dexcom calls back (ten minutes).
    */
-  putPendingUpstream(
-    state: string,
-    request: AuthorizationRequest,
-  ): Promise<void>;
+  putPendingUpstream(state: string, request: PendingConsent): Promise<void>;
   /**
    * Reads and deletes an approved request by upstream state.
    */
-  takePendingUpstream(state: string): Promise<AuthorizationRequest | undefined>;
+  takePendingUpstream(state: string): Promise<PendingConsent | undefined>;
   /**
    * Saves a one-time authorization code by hash.
    */
@@ -265,7 +262,7 @@ export function createKvStore(kv: Deno.Kv): Store {
       });
     },
     async takePendingUpstream(state) {
-      return take<AuthorizationRequest>(["pending", await sha256(state)]);
+      return take<PendingConsent>(["pending", await sha256(state)]);
     },
     async putCode(code, record) {
       await kv.set(["code", await sha256(code)], record, {

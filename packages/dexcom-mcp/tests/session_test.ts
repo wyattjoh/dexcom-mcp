@@ -71,3 +71,28 @@ Deno.test("rejected refresh deletes the grant and requires re-auth", async () =>
     fx.close();
   }
 });
+
+Deno.test("rate-limited refresh keeps the grant", async () => {
+  const fx = await createFixture();
+  try {
+    fx.dexcom.validRefreshTokens.add("seed-refresh");
+    fx.dexcom.refreshFailureStatus = 429;
+    await fx.store.putGrant({
+      userId: "u",
+      accessToken: "expired",
+      refreshToken: "seed-refresh",
+      accessTokenExpiresAt: 0,
+      updatedAt: 0,
+    });
+    const error = await assertRejects(() =>
+      fx.ctx.sessions.withAuth("u", (auth) => getDevices(auth))
+    );
+    assertEquals(isReauthorizationRequiredError(error), false);
+    assertEquals(
+      (await fx.store.getGrant("u"))?.grant.refreshToken,
+      "seed-refresh",
+    );
+  } finally {
+    fx.close();
+  }
+});

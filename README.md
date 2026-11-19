@@ -72,11 +72,20 @@ deno task login   # opens Dexcom login, stores the grant in Deno KV
 deno task start   # serves MCP on stdio
 ```
 
-Claude Code example:
+MCP clients launch the server from their own working directory, so `.env` in
+this repo isn't read. Pass the credentials explicitly. Claude Code example:
 
 ```bash
-claude mcp add dexcom -- deno run --unstable-kv -A jsr:@wyattjoh/dexcom-mcp
+claude mcp add dexcom \
+  -e DEXCOM_CLIENT_ID=... -e DEXCOM_CLIENT_SECRET=... -e DEXCOM_REGION=sandbox \
+  -- deno run --unstable-kv -A /path/to/dexcom-mcp/packages/dexcom-mcp/src/index.ts
 ```
+
+Grants live in Deno KV at `DEXCOM_MCP_KV_PATH`. By default that's a per-user
+data directory (`~/Library/Application Support/dexcom-mcp/` on macOS,
+`$XDG_DATA_HOME` or `~/.local/share/dexcom-mcp/` on Linux,
+`%LOCALAPPDATA%\dexcom-mcp\` on Windows), so `login` and the stdio server share
+it regardless of the working directory.
 
 ### Docker
 

@@ -5,9 +5,13 @@ helpers plus read-only access to glucose readings (EGVs), events, calibrations,
 alerts, devices, and data ranges. Used by
 [`@wyattjoh/dexcom-mcp`](https://jsr.io/@wyattjoh/dexcom-mcp).
 
+<!-- x-release-please-start-version -->
+
 ```bash
-deno add jsr:@wyattjoh/dexcom
+deno add jsr:@wyattjoh/dexcom@0.1.0
 ```
+
+<!-- x-release-please-end -->
 
 ```ts
 import {

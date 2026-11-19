@@ -12,6 +12,14 @@
           "type": "json",
           "path": "deno.json",
           "jsonpath": "$.version"
+        },
+        {
+          "type": "generic",
+          "path": "README.md"
+        },
+        {
+          "type": "generic",
+          "path": "/README.md"
         }
       ],
       "initial-version": "0.1.0"
@@ -25,6 +33,10 @@
           "type": "json",
           "path": "deno.json",
           "jsonpath": "$.version"
+        },
+        {
+          "type": "generic",
+          "path": "README.md"
         }
       ],
       "initial-version": "0.1.0"

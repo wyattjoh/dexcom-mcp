@@ -49,9 +49,11 @@ servers locally.
 
 2. Install the command:
 
+   <!-- x-release-please-start-version -->
    ```bash
-   deno install --global --name dexcom-mcp --unstable-kv --allow-net --allow-env --allow-read --allow-write --allow-run jsr:@wyattjoh/dexcom-mcp
+   deno install --global --name dexcom-mcp --unstable-kv --allow-net --allow-env --allow-read --allow-write --allow-run jsr:@wyattjoh/dexcom-mcp@0.1.0
    ```
+   <!-- x-release-please-end -->
 
 3. Sign in with Dexcom. A browser window opens; approve access and close it when
    it says you're connected.
@@ -76,6 +78,7 @@ servers locally.
    **Claude Desktop** (`claude_desktop_config.json`), or any client that takes a
    JSON config:
 
+   <!-- x-release-please-start-version -->
    ```json
    {
      "mcpServers": {
@@ -89,7 +92,7 @@ servers locally.
            "--allow-read",
            "--allow-write",
            "--allow-run",
-           "jsr:@wyattjoh/dexcom-mcp"
+           "jsr:@wyattjoh/dexcom-mcp@0.1.0"
          ],
          "env": {
            "DEXCOM_CLIENT_ID": "your-id",
@@ -100,6 +103,7 @@ servers locally.
      }
    }
    ```
+   <!-- x-release-please-end -->
 
 Your Dexcom sign-in is saved in a local database and refreshed automatically. It
 lasts up to a year, or until you revoke access at dexcom.com. Run
@@ -117,23 +121,27 @@ connects approves access, signs in with Dexcom, and only sees their own data.
    your Dexcom app.
 3. Start the server behind your HTTPS proxy:
 
+   <!-- x-release-please-start-version -->
    ```bash
    DEXCOM_CLIENT_ID=your-id \
    DEXCOM_CLIENT_SECRET=your-secret \
    DEXCOM_REGION=us \
    MCP_PUBLIC_URL=https://dexcom.example.com \
-     deno run --unstable-kv --allow-net --allow-env --allow-read --allow-write --allow-run jsr:@wyattjoh/dexcom-mcp --http --host 0.0.0.0 --port 3000
+     deno run --unstable-kv --allow-net --allow-env --allow-read --allow-write --allow-run jsr:@wyattjoh/dexcom-mcp@0.1.0 --http --host 0.0.0.0 --port 3000
    ```
+   <!-- x-release-please-end -->
 
    Or with Docker:
 
+   <!-- x-release-please-start-version -->
    ```bash
-   docker build -t dexcom-mcp https://github.com/wyattjoh/dexcom-mcp.git
+   docker build -t dexcom-mcp https://github.com/wyattjoh/dexcom-mcp.git#dexcom-mcp-v0.1.0
    docker run -d -p 3000:3000 -v dexcom-data:/data \
      -e DEXCOM_CLIENT_ID=your-id -e DEXCOM_CLIENT_SECRET=your-secret \
      -e DEXCOM_REGION=us -e MCP_PUBLIC_URL=https://dexcom.example.com \
      dexcom-mcp
    ```
+   <!-- x-release-please-end -->
 
 4. In your MCP client, add the server URL `https://dexcom.example.com/mcp`. The
    client opens a consent page, then Dexcom's sign-in.
@@ -178,6 +186,9 @@ from.
   app must match exactly, including port and path.
 - **No recent readings**: Dexcom delays app uploads by 1 to 3 hours. Ask for the
   data range to see what's available.
+- **"This version is blocked by the minimum dependency age policy"**: Deno 2.9+
+  won't install a package version in its first 24 hours. Wait a day after a
+  release, or add `--min-dep-age=0` to the command.
 - **Readings from the sandbox look fake**: they are. Switch `DEXCOM_REGION`
   after Dexcom grants production access.
 
@@ -200,6 +211,11 @@ deno task check && deno task lint && deno fmt --check
 deno task dev:http      # local HTTP server with reload
 deno task login && deno task start   # stdio from source
 ```
+
+Install commands in the READMEs are pinned to the latest release. Release-please
+rewrites every version between `x-release-please-start-version` and
+`x-release-please-end` markers, so keep new install snippets inside those
+markers.
 
 Releases are automated with
 [release-please](https://github.com/googleapis/release-please): merging the

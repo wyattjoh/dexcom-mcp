@@ -81,8 +81,12 @@ See `.env.example`. Required: `DEXCOM_CLIENT_ID`, `DEXCOM_CLIENT_SECRET`. HTTP:
 release-please (`release-please-config.json`, `.release-please-manifest.json`)
 versions both packages from Conventional Commits and bumps each `deno.json`
 version. Merging the release PR runs `.github/workflows/release.yml`, which
-publishes to JSR with GitHub OIDC (`deno publish`). Human-facing docs use
-`jsr:@wyattjoh/dexcom-mcp`; keep them in sync with CLI flags and env vars.
+publishes to JSR with GitHub OIDC (`deno publish`). Human-facing docs pin
+`jsr:@wyattjoh/dexcom-mcp@<version>` inside `x-release-please-start-version` /
+`x-release-please-end` markers (README files are generic `extra-files`;
+`/README.md` is repo-root relative). Only `@wyattjoh/dexcom-mcp` versions belong
+in the root README's markers, since every semver inside them is rewritten. Keep
+docs in sync with CLI flags and env vars.
 
 ## Reference
 

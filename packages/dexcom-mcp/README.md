@@ -12,20 +12,28 @@ the server.
 Create an app at [developer.dexcom.com](https://developer.dexcom.com) and add
 `http://localhost:8765/callback` as a redirect URI. Then:
 
+<!-- x-release-please-start-version -->
+
 ```bash
-deno install --global --name dexcom-mcp --unstable-kv --allow-net --allow-env --allow-read --allow-write --allow-run jsr:@wyattjoh/dexcom-mcp
+deno install --global --name dexcom-mcp --unstable-kv --allow-net --allow-env --allow-read --allow-write --allow-run jsr:@wyattjoh/dexcom-mcp@0.1.0
 
 DEXCOM_CLIENT_ID=your-id DEXCOM_CLIENT_SECRET=your-secret dexcom-mcp login
 
 claude mcp add dexcom -e DEXCOM_CLIENT_ID=your-id -e DEXCOM_CLIENT_SECRET=your-secret -- dexcom-mcp
 ```
 
+<!-- x-release-please-end -->
+
 ## Hosted (remote MCP with OAuth)
+
+<!-- x-release-please-start-version -->
 
 ```bash
 MCP_PUBLIC_URL=https://dexcom.example.com DEXCOM_CLIENT_ID=... DEXCOM_CLIENT_SECRET=... \
-  deno run --unstable-kv --allow-net --allow-env --allow-read --allow-write --allow-run jsr:@wyattjoh/dexcom-mcp --http --host 0.0.0.0
+  deno run --unstable-kv --allow-net --allow-env --allow-read --allow-write --allow-run jsr:@wyattjoh/dexcom-mcp@0.1.0 --http --host 0.0.0.0
 ```
+
+<!-- x-release-please-end -->
 
 Register `https://dexcom.example.com/oauth/dexcom/callback` with Dexcom and
 connect clients to `https://dexcom.example.com/mcp`.

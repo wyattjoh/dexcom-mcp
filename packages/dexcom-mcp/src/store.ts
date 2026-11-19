@@ -417,9 +417,15 @@ export function createKvStore(kv: Deno.Kv): Store {
         key,
         usedKey,
       ]);
-      if (used.value) return { status: "reused", ...used.value };
+      if (typeof used.value?.familyId === "string") {
+        return { status: "reused", ...used.value };
+      }
       const record = isLive(entry.value ?? undefined);
-      if (!record) return { status: "invalid" };
+      // Records from before token families (0.1.0) can never be redeemed;
+      // leave no tombstone so a replay is not mistaken for theft.
+      if (!record || typeof record.familyId !== "string" || !record.familyId) {
+        return { status: "invalid" };
+      }
       // Spend the token and leave a tombstone in one atomic step, so a
       // concurrent replay sees either the live token or the tombstone.
       const result = await kv.atomic()

@@ -627,3 +627,29 @@ Deno.test("https issuers use __Host- binding cookies", async () => {
     fx.close();
   }
 });
+
+Deno.test("0.1.0 refresh tokens are refused cleanly, even when replayed", async () => {
+  const { fx, http } = await setup({ refreshRetryGraceMs: 0 });
+  try {
+    const clientId = await register(http);
+    await newTokens(http, clientId);
+    // A record shaped like 0.1.0's: no familyId.
+    await fx.store.putRefreshToken(
+      "legacy-refresh",
+      {
+        userId: FAKE_USER_ID,
+        clientId,
+        resource: undefined,
+        expiresAt: Date.now() + 60_000,
+      } as unknown as Parameters<typeof fx.store.putRefreshToken>[1],
+    );
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await refreshWith(http, clientId, "legacy-refresh");
+      assertEquals(response.status, 400);
+      assertEquals((await response.json()).error, "invalid_grant");
+    }
+  } finally {
+    await http.close();
+    fx.close();
+  }
+});

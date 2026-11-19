@@ -1,0 +1,7 @@
+.scratch/
+data/
+*.kv
+*.kv-shm
+*.kv-wal
+.env
+packages/dexcom-mcp/dexcom-mcp

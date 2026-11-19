@@ -86,7 +86,10 @@ export async function runLogin(
     }
     try {
       const tokens = await exchangeCode(config, code);
-      await store.putGrant(grantFromTokens(LOCAL_USER_ID, tokens));
+      const existing = await store.getGrant(LOCAL_USER_ID);
+      await store.putGrant(
+        grantFromTokens(LOCAL_USER_ID, tokens, existing?.grant.grantId),
+      );
       resolve();
       return page("Dexcom connected. You can close this window.");
     } catch (exchangeError) {

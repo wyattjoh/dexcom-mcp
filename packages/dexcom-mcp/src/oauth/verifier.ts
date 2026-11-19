@@ -21,8 +21,9 @@ export function userIdFromAuthInfo(
 
 /**
  * Verifies opaque MCP access tokens for the SDK's bearer-auth helpers. A
- * token is only valid while the user's Dexcom grant still exists, so a
- * revoked Dexcom grant forces clients back through authorization.
+ * token is only valid while its family is live and was issued under the
+ * user's current Dexcom grant, so a revoked grant or a replayed refresh token
+ * forces clients back through authorization.
  *
  * @param ctx - Bridge context.
  * @returns The verifier.
@@ -39,7 +40,19 @@ export function createTokenVerifier(
           "Invalid or expired token",
         );
       }
-      if (!await ctx.store.getGrant(record.userId)) {
+      const [family, grant] = await Promise.all([
+        ctx.store.getFamily(record.familyId),
+        ctx.store.getGrant(record.userId),
+      ]);
+      if (
+        !family || family.userId !== record.userId ||
+        typeof family.grantId !== "string"
+      ) {
+        throw new OAuthError(OAuthErrorCode.InvalidToken, "Token was revoked");
+      }
+      // The family must belong to the user's current grant, so tokens from
+      // before a revocation stay dead after the user authorizes again.
+      if (!grant || grant.grant.grantId !== family.grantId) {
         throw new OAuthError(
           OAuthErrorCode.InvalidToken,
           "Dexcom authorization was revoked",

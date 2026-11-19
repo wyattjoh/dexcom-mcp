@@ -1,5 +1,6 @@
 import { randomToken, verifyPkce } from "../crypto.ts";
-import type { McpTokenRecord } from "../store.ts";
+import { getLogger } from "../logging.ts";
+import type { RegisteredClient, TokenFamily } from "../store.ts";
 import { isAllowedResource } from "./authorize.ts";
 import {
   type BridgeContext,
@@ -8,26 +9,42 @@ import {
   readForm,
 } from "./context.ts";
 
+const logger = getLogger(["dexcom-mcp", "oauth"]);
+
 async function issueTokens(
   ctx: BridgeContext,
-  base: Omit<McpTokenRecord, "expiresAt">,
+  client: RegisteredClient,
+  family: TokenFamily,
+  resource: string | undefined,
 ): Promise<Response> {
   const now = Date.now();
   const accessToken = randomToken();
   const refreshToken = randomToken();
+  const base = {
+    userId: family.userId,
+    clientId: family.clientId,
+    familyId: family.familyId,
+    resource,
+  };
+  const accessExpiresAt = Math.min(
+    now + ctx.accessTokenTtlMs,
+    family.expiresAt,
+  );
   await ctx.store.putAccessToken(accessToken, {
     ...base,
-    expiresAt: now + ctx.accessTokenTtlMs,
+    expiresAt: accessExpiresAt,
   });
   await ctx.store.putRefreshToken(refreshToken, {
     ...base,
-    expiresAt: now + ctx.refreshTokenTtlMs,
+    expiresAt: family.expiresAt,
   });
+  // A client stays registered while it has tokens that could still refresh.
+  await ctx.store.putClient(client, ctx.refreshTokenTtlMs);
   return jsonResponse(
     {
       access_token: accessToken,
       token_type: "Bearer",
-      expires_in: Math.floor(ctx.accessTokenTtlMs / 1000),
+      expires_in: Math.max(1, Math.floor((accessExpiresAt - now) / 1000)),
       refresh_token: refreshToken,
     },
     200,
@@ -73,7 +90,8 @@ export async function handleToken(
     );
   }
   const clientId = form.get("client_id");
-  if (!clientId || !await ctx.store.getClient(clientId)) {
+  const client = clientId ? await ctx.store.getClient(clientId) : undefined;
+  if (!clientId || !client) {
     return oauthErrorResponse("invalid_client", "Unknown client_id", 401);
   }
 
@@ -109,17 +127,27 @@ export async function handleToken(
       record.resource,
     );
     if (resourceError) return resourceError;
-    if (!await ctx.sessions.hasGrant(record.userId)) {
+    const grant = await ctx.store.getGrant(record.userId);
+    if (!grant || typeof grant.grant.grantId !== "string") {
       return oauthErrorResponse(
         "invalid_grant",
         "Dexcom authorization is no longer valid",
       );
     }
-    return issueTokens(ctx, {
+    const family: TokenFamily = {
+      familyId: randomToken(),
       userId: record.userId,
       clientId,
-      resource: record.resource ?? form.get("resource") ?? undefined,
-    });
+      grantId: grant.grant.grantId,
+      expiresAt: Date.now() + ctx.refreshTokenTtlMs,
+    };
+    await ctx.store.putFamily(family);
+    return issueTokens(
+      ctx,
+      client,
+      family,
+      record.resource ?? form.get("resource") ?? undefined,
+    );
   }
 
   if (grantType === "refresh_token") {
@@ -127,8 +155,31 @@ export async function handleToken(
     if (!refreshToken) {
       return oauthErrorResponse("invalid_request", "refresh_token is required");
     }
-    const record = await ctx.store.takeRefreshToken(refreshToken);
-    if (!record || record.clientId !== clientId) {
+    const redemption = await ctx.store.takeRefreshToken(refreshToken);
+    if (redemption.status === "reused") {
+      // A spent refresh token came back: it leaked. Revoke every token
+      // rotated from the same authorization (RFC 9700 section 4.14.2).
+      await ctx.store.deleteFamily(redemption.familyId);
+      logger.warn("Refresh token replayed; revoked its token family", {
+        clientId,
+      });
+      return oauthErrorResponse(
+        "invalid_grant",
+        "Invalid or expired refresh token",
+      );
+    }
+    if (redemption.status === "invalid") {
+      return oauthErrorResponse(
+        "invalid_grant",
+        "Invalid or expired refresh token",
+      );
+    }
+    const { record } = redemption;
+    const family = await ctx.store.getFamily(record.familyId);
+    if (!family || family.clientId !== clientId) {
+      // Presented by a different client than it was issued to: treat as
+      // leaked as well.
+      if (family) await ctx.store.deleteFamily(family.familyId);
       return oauthErrorResponse(
         "invalid_grant",
         "Invalid or expired refresh token",
@@ -140,17 +191,15 @@ export async function handleToken(
       record.resource,
     );
     if (resourceError) return resourceError;
-    if (!await ctx.sessions.hasGrant(record.userId)) {
+    const grant = await ctx.store.getGrant(family.userId);
+    if (!grant || grant.grant.grantId !== family.grantId) {
+      await ctx.store.deleteFamily(family.familyId);
       return oauthErrorResponse(
         "invalid_grant",
         "Dexcom authorization was revoked; authorize again",
       );
     }
-    return issueTokens(ctx, {
-      userId: record.userId,
-      clientId,
-      resource: record.resource,
-    });
+    return issueTokens(ctx, client, family, record.resource);
   }
 
   return oauthErrorResponse(

@@ -17,7 +17,7 @@ import { createKvStore, type Store } from "./store.ts";
 import { createHttpHandler, startHttpServer } from "./transports/http.ts";
 import { createStdioServer, LOCAL_USER_ID } from "./transports/stdio.ts";
 
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
 const DEFAULT_LOCAL_REDIRECT = "http://localhost:8765/callback";
 
 function requireEnv(name: string): string {
@@ -52,12 +52,14 @@ function loadDexcomConfig(redirectUri: string): DexcomConfig {
  */
 function defaultKvPath(): string {
   const home = Deno.env.get("HOME") ?? Deno.env.get("USERPROFILE");
-  const base = Deno.env.get("XDG_DATA_HOME") ??
-    (Deno.build.os === "windows"
-      ? Deno.env.get("LOCALAPPDATA")
-      : home && (Deno.build.os === "darwin"
-        ? `${home}/Library/Application Support`
-        : `${home}/.local/share`));
+  // XDG_DATA_HOME is honored only on Linux and other Unixes: on macOS and
+  // Windows, GUI-launched MCP clients rarely inherit it, so honoring it would
+  // split `login` (terminal) and the server (GUI) across two KV files.
+  const base = Deno.build.os === "windows"
+    ? Deno.env.get("LOCALAPPDATA")
+    : Deno.build.os === "darwin"
+    ? home && `${home}/Library/Application Support`
+    : Deno.env.get("XDG_DATA_HOME") ?? (home && `${home}/.local/share`);
   if (!base) {
     throw new Error(
       "Cannot determine a data directory; set DEXCOM_MCP_KV_PATH",
@@ -66,8 +68,12 @@ function defaultKvPath(): string {
   return `${base}/dexcom-mcp/dexcom-mcp.kv`;
 }
 
+function kvPath(): string {
+  return Deno.env.get("DEXCOM_MCP_KV_PATH") ?? defaultKvPath();
+}
+
 async function openStore(): Promise<Store> {
-  const path = Deno.env.get("DEXCOM_MCP_KV_PATH") ?? defaultKvPath();
+  const path = kvPath();
   if (path !== ":memory:" && !/^https?:/.test(path)) {
     const dir = path.replace(/[\\/][^\\/]*$/, "");
     if (dir && dir !== path) await Deno.mkdir(dir, { recursive: true });
@@ -103,22 +109,40 @@ function setupShutdown(close: () => Promise<void>): void {
   if (Deno.build.os !== "windows") Deno.addSignalListener("SIGTERM", cleanup);
 }
 
-async function runHttp(port: number, host: string): Promise<void> {
-  const logger = getLogger(["dexcom-mcp"]);
-  const isLoopback = LOOPBACK_HOSTS.has(host);
-  const publicUrl = new URL(
-    Deno.env.get("MCP_PUBLIC_URL") ?? `http://localhost:${port}`,
-  );
+/**
+ * Validates `MCP_PUBLIC_URL`: an origin with no path, and https unless both
+ * the public hostname and the bind address are loopback (local development).
+ * Behind a reverse proxy the bind address is loopback, so the public URL
+ * itself decides whether codes, tokens, and cookies would travel in clear.
+ *
+ * @param value - The configured public URL.
+ * @param bindHost - The `--host` bind address.
+ * @returns The parsed URL.
+ */
+export function parsePublicUrl(value: string, bindHost: string): URL {
+  const publicUrl = new URL(value);
   if (publicUrl.pathname !== "/" || publicUrl.search || publicUrl.hash) {
     throw new Error(
       "MCP_PUBLIC_URL must be an origin without a path (serve the bridge at the root of its host)",
     );
   }
-  if (publicUrl.protocol !== "https:" && !isLoopback) {
+  if (
+    publicUrl.protocol !== "https:" &&
+    !(LOOPBACK_HOSTS.has(publicUrl.hostname) && LOOPBACK_HOSTS.has(bindHost))
+  ) {
     throw new Error(
-      "MCP_PUBLIC_URL must be an https URL when binding to a non-loopback host. Use --host 127.0.0.1 for local development.",
+      "MCP_PUBLIC_URL must be an https URL unless it is a loopback address and the server binds to loopback (local development).",
     );
   }
+  return publicUrl;
+}
+
+async function runHttp(port: number, host: string): Promise<void> {
+  const logger = getLogger(["dexcom-mcp"]);
+  const publicUrl = parsePublicUrl(
+    Deno.env.get("MCP_PUBLIC_URL") ?? `http://localhost:${port}`,
+    host,
+  );
   const issuer = publicUrl.href.replace(/\/+$/, "");
   const dexcom = loadDexcomConfig(`${issuer}${DEXCOM_CALLBACK_PATH}`);
   const store = await openStore();
@@ -208,6 +232,7 @@ async function main(): Promise<void> {
         } finally {
           store.close();
         }
+        console.error(`Stored the Dexcom grant in ${kvPath()}`);
       })
       .parse(Deno.args);
   } catch (error) {

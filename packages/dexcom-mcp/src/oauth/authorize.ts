@@ -3,6 +3,7 @@ import { randomToken, sha256, timingSafeEqualString } from "../crypto.ts";
 import type { AuthorizationRequest } from "../store.ts";
 import {
   bindingCookie,
+  bindingCookieName,
   type BridgeContext,
   CALLBACK_COOKIE,
   DEXCOM_CALLBACK_PATH,
@@ -66,15 +67,13 @@ async function parseAuthorization(
     };
   }
 
-  // From here on, errors go back to the verified redirect URI.
-  const state = params.get("state") ?? undefined;
+  // Anyone can register a redirect URI, so malformed requests get an error
+  // page rather than an automatic redirect: otherwise this origin would be
+  // an open redirector (RFC 9700 section 4.11.2). Outcomes after the user
+  // interacts (denial, codes) still go back to the client.
   const fail = (error: string, description: string): ParsedAuthorization => ({
     ok: false,
-    response: redirectToClient(ctx, redirectUri, {
-      error,
-      error_description: description,
-      state,
-    }),
+    response: errorPage(`${description} (${error}).`),
   });
 
   if (params.get("response_type") !== "code") {
@@ -95,7 +94,13 @@ async function parseAuthorization(
   return {
     ok: true,
     clientName: client.clientName ?? "An MCP client",
-    request: { clientId, redirectUri, codeChallenge, state, resource },
+    request: {
+      clientId,
+      redirectUri,
+      codeChallenge,
+      state: params.get("state") ?? undefined,
+      resource,
+    },
   };
 }
 
@@ -175,7 +180,7 @@ export async function handleAuthorizePost(
     );
   }
 
-  const binding = readCookie(request, CONSENT_COOKIE);
+  const binding = readCookie(request, bindingCookieName(ctx, CONSENT_COOKIE));
   if (
     !binding ||
     !timingSafeEqualString(await sha256(binding), consent.browserBindingHash)

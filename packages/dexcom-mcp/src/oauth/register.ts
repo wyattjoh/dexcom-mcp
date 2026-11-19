@@ -4,9 +4,12 @@ import {
   type BridgeContext,
   jsonResponse,
   oauthErrorResponse,
+  readBodyText,
 } from "./context.ts";
 
 const MAX_REDIRECT_URIS = 10;
+const MAX_REDIRECT_URI_LENGTH = 2048;
+const UNUSED_CLIENT_TTL_MS = 24 * 60 * 60 * 1000;
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const FORBIDDEN_SCHEMES = new Set([
   "javascript:",
@@ -25,6 +28,9 @@ const FORBIDDEN_SCHEMES = new Set([
  */
 export function validateRedirectUri(value: unknown): string | undefined {
   if (typeof value !== "string") return "redirect_uris must be strings";
+  if (value.length > MAX_REDIRECT_URI_LENGTH) {
+    return `Redirect URIs must be at most ${MAX_REDIRECT_URI_LENGTH} characters`;
+  }
   let url: URL;
   try {
     url = new URL(value);
@@ -54,15 +60,24 @@ export async function handleRegister(
   ctx: BridgeContext,
   request: Request,
 ): Promise<Response> {
+  const text = await readBodyText(request, 16 * 1024);
+  if (text === undefined) {
+    return oauthErrorResponse(
+      "invalid_client_metadata",
+      "Body must be UTF-8 JSON of at most 16 KiB",
+    );
+  }
   let body: Record<string, unknown>;
   try {
-    const text = await request.text();
-    if (text.length > 16 * 1024) {
-      return oauthErrorResponse("invalid_client_metadata", "Body too large");
-    }
     body = JSON.parse(text) as Record<string, unknown>;
   } catch {
     return oauthErrorResponse("invalid_client_metadata", "Body must be JSON");
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return oauthErrorResponse(
+      "invalid_client_metadata",
+      "Body must be a JSON object",
+    );
   }
 
   const redirectUris = body.redirect_uris;
@@ -103,7 +118,12 @@ export async function handleRegister(
     redirectUris: redirectUris as string[],
     issuedAt: Math.floor(Date.now() / 1000),
   };
-  await ctx.store.putClient(client);
+  // Unused registrations expire after a day; each token issuance extends a
+  // client to the refresh token lifetime, so abandoned ones do not pile up.
+  await ctx.store.putClient(
+    client,
+    Math.min(UNUSED_CLIENT_TTL_MS, ctx.refreshTokenTtlMs),
+  );
 
   return jsonResponse({
     client_id: client.clientId,

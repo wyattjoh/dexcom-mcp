@@ -203,11 +203,14 @@ export interface Fixture {
  * Creates a {@link Fixture}.
  *
  * @param refreshDelayMs - Fake refresh latency.
+ * @param issuer - Public origin of the bridge.
  * @returns The fixture.
  */
-export async function createFixture(refreshDelayMs = 0): Promise<Fixture> {
+export async function createFixture(
+  refreshDelayMs = 0,
+  issuer = "http://localhost:3000",
+): Promise<Fixture> {
   const dexcom = createFakeDexcom(refreshDelayMs);
-  const issuer = "http://localhost:3000";
   const config = createDexcomConfig({
     region: "sandbox",
     clientId: "client",

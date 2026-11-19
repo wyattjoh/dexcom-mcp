@@ -1,4 +1,4 @@
-import { sha256 } from "./crypto.ts";
+import { randomToken, sha256 } from "./crypto.ts";
 
 /**
  * A dynamically registered MCP client (RFC 7591). Only public clients are
@@ -91,10 +91,74 @@ export interface McpTokenRecord {
    */
   resource: string | undefined;
   /**
+   * Token family (one authorization and all of its refresh rotations).
+   */
+  familyId: string;
+  /**
    * Expiry (milliseconds since epoch).
    */
   expiresAt: number;
 }
+
+/**
+ * One MCP authorization and every token rotated from it. Deleting the family
+ * revokes all of its access and refresh tokens at once.
+ */
+export interface TokenFamily {
+  /**
+   * Family identifier.
+   */
+  familyId: string;
+  /**
+   * Dexcom user.
+   */
+  userId: string;
+  /**
+   * Client the family was issued to.
+   */
+  clientId: string;
+  /**
+   * {@link DexcomGrant.grantId} the family was issued under; a new grant
+   * (after the old one was deleted) does not revive the family.
+   */
+  grantId: string;
+  /**
+   * Absolute expiry of the family (milliseconds since epoch); rotation never
+   * extends it.
+   */
+  expiresAt: number;
+}
+
+/**
+ * Outcome of redeeming an MCP refresh token.
+ */
+export type RefreshTokenRedemption =
+  | {
+    /**
+     * The token was live and is now spent.
+     */
+    status: "redeemed";
+    /**
+     * The token's record.
+     */
+    record: McpTokenRecord;
+  }
+  | {
+    /**
+     * The token was already spent: it has been replayed.
+     */
+    status: "reused";
+    /**
+     * Family the spent token belonged to.
+     */
+    familyId: string;
+  }
+  | {
+    /**
+     * Unknown or expired token.
+     */
+    status: "invalid";
+  };
 
 /**
  * Dexcom tokens for one user. Never leaves the server.
@@ -104,6 +168,11 @@ export interface DexcomGrant {
    * Dexcom user ID (per account, per client app), or "local" for stdio.
    */
   userId: string;
+  /**
+   * Random identifier minted when the grant is first created and kept across
+   * refreshes and re-authorizations. MCP token families are bound to it.
+   */
+  grantId: string;
   /**
    * Current Dexcom access token.
    */
@@ -141,9 +210,9 @@ export interface VersionedGrant {
  */
 export interface Store {
   /**
-   * Saves a registered client.
+   * Saves a registered client for `ttlMs`. Saving it again extends the TTL.
    */
-  putClient(client: RegisteredClient): Promise<void>;
+  putClient(client: RegisteredClient, ttlMs: number): Promise<void>;
   /**
    * Loads a registered client.
    */
@@ -185,9 +254,22 @@ export interface Store {
    */
   putRefreshToken(token: string, record: McpTokenRecord): Promise<void>;
   /**
-   * Reads and deletes an MCP refresh token (rotation).
+   * Redeems an MCP refresh token (rotation). The spent token is remembered
+   * until it would have expired, so a replay is reported as `reused`.
    */
-  takeRefreshToken(token: string): Promise<McpTokenRecord | undefined>;
+  takeRefreshToken(token: string): Promise<RefreshTokenRedemption>;
+  /**
+   * Saves a token family until its absolute expiry.
+   */
+  putFamily(family: TokenFamily): Promise<void>;
+  /**
+   * Loads a live token family.
+   */
+  getFamily(familyId: unknown): Promise<TokenFamily | undefined>;
+  /**
+   * Deletes a token family, revoking all of its tokens.
+   */
+  deleteFamily(familyId: string): Promise<void>;
   /**
    * Loads a user's Dexcom grant with its versionstamp.
    */
@@ -203,10 +285,27 @@ export interface Store {
    */
   replaceGrant(grant: DexcomGrant, versionstamp: string): Promise<boolean>;
   /**
-   * Deletes a grant. MCP tokens for the user stop working because the
-   * verifier requires a live grant.
+   * Deletes a grant only if it is unchanged since `versionstamp`. MCP tokens
+   * for the user stop working because the verifier requires the grant their
+   * family was issued under.
+   *
+   * @returns Whether the grant was deleted.
    */
-  deleteGrant(userId: string): Promise<void>;
+  deleteGrantIf(userId: string, versionstamp: string): Promise<boolean>;
+  /**
+   * Takes the cross-process lease for refreshing a user's Dexcom tokens.
+   *
+   * @returns An owner token, or undefined while another holder's lease is
+   * live.
+   */
+  acquireRefreshLock(
+    userId: string,
+    ttlMs: number,
+  ): Promise<string | undefined>;
+  /**
+   * Releases a refresh lease if `owner` still holds it.
+   */
+  releaseRefreshLock(userId: string, owner: string): Promise<void>;
   /**
    * Closes the underlying KV handle.
    */
@@ -214,6 +313,11 @@ export interface Store {
 }
 
 const TEN_MINUTES_MS = 10 * 60 * 1000;
+
+interface RefreshLease {
+  owner: string;
+  expiresAt: number;
+}
 
 function remainingMs(expiresAt: number): number {
   return Math.max(1000, expiresAt - Date.now());
@@ -241,8 +345,8 @@ export function createKvStore(kv: Deno.Kv): Store {
   }
 
   return {
-    async putClient(client) {
-      await kv.set(["client", client.clientId], client);
+    async putClient(client, ttlMs) {
+      await kv.set(["client", client.clientId], client, { expireIn: ttlMs });
     },
     async getClient(clientId) {
       return (await kv.get<RegisteredClient>(["client", clientId])).value ??
@@ -292,9 +396,44 @@ export function createKvStore(kv: Deno.Kv): Store {
       });
     },
     async takeRefreshToken(token) {
-      return isLive(
-        await take<McpTokenRecord>(["refresh", await sha256(token)]),
-      );
+      const hash = await sha256(token);
+      const key = ["refresh", hash];
+      const usedKey = ["refresh-used", hash];
+      const [entry, used] = await kv.getMany<[McpTokenRecord, string]>([
+        key,
+        usedKey,
+      ]);
+      if (typeof used.value === "string") {
+        return { status: "reused", familyId: used.value };
+      }
+      const record = isLive(entry.value ?? undefined);
+      if (!record) return { status: "invalid" };
+      // Spend the token and leave a tombstone in one atomic step, so a
+      // concurrent replay sees either the live token or the tombstone.
+      const result = await kv.atomic()
+        .check(entry)
+        .check(used)
+        .delete(key)
+        .set(usedKey, record.familyId, {
+          expireIn: remainingMs(record.expiresAt),
+        })
+        .commit();
+      return result.ok
+        ? { status: "redeemed", record }
+        : { status: "reused", familyId: record.familyId };
+    },
+    async putFamily(family) {
+      await kv.set(["family", family.familyId], family, {
+        expireIn: remainingMs(family.expiresAt),
+      });
+    },
+    async getFamily(familyId) {
+      if (typeof familyId !== "string" || !familyId) return undefined;
+      const entry = await kv.get<TokenFamily>(["family", familyId]);
+      return isLive(entry.value ?? undefined);
+    },
+    async deleteFamily(familyId) {
+      await kv.delete(["family", familyId]);
     },
     async getGrant(userId) {
       const entry = await kv.get<DexcomGrant>(["grant", userId]);
@@ -311,8 +450,32 @@ export function createKvStore(kv: Deno.Kv): Store {
         .commit();
       return result.ok;
     },
-    async deleteGrant(userId) {
-      await kv.delete(["grant", userId]);
+    async deleteGrantIf(userId, versionstamp) {
+      const result = await kv.atomic()
+        .check({ key: ["grant", userId], versionstamp })
+        .delete(["grant", userId])
+        .commit();
+      return result.ok;
+    },
+    async acquireRefreshLock(userId, ttlMs) {
+      const key = ["refresh-lock", userId];
+      // KV expiry is lazy, so the lease carries its own deadline.
+      const entry = await kv.get<RefreshLease>(key);
+      if (entry.value && entry.value.expiresAt > Date.now()) return undefined;
+      const owner = randomToken();
+      const result = await kv.atomic()
+        .check(entry)
+        .set(key, { owner, expiresAt: Date.now() + ttlMs }, {
+          expireIn: ttlMs,
+        })
+        .commit();
+      return result.ok ? owner : undefined;
+    },
+    async releaseRefreshLock(userId, owner) {
+      const key = ["refresh-lock", userId];
+      const entry = await kv.get<RefreshLease>(key);
+      if (entry.value?.owner !== owner) return;
+      await kv.atomic().check(entry).delete(key).commit();
     },
     close() {
       kv.close();

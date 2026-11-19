@@ -122,12 +122,29 @@ export function readCookie(request: Request, name: string): string | undefined {
 }
 
 /**
+ * The cookie name used for a browser binding. On an https issuer it carries
+ * the `__Host-` prefix, which browsers only accept from this exact host
+ * (Secure, Path=/, no Domain), so a sibling subdomain cannot plant one.
+ *
+ * @param ctx - Bridge context.
+ * @param name - Base cookie name.
+ * @returns The cookie name to set and read.
+ */
+export function bindingCookieName(
+  ctx: Pick<BridgeContext, "issuer">,
+  name: string,
+): string {
+  return ctx.issuer.startsWith("https:") ? `__Host-${name}` : name;
+}
+
+/**
  * Builds a Set-Cookie value for a short-lived, HttpOnly browser binding.
  *
- * @param ctx - Bridge context (decides the Secure flag).
- * @param name - Cookie name.
+ * @param ctx - Bridge context (decides Secure and the `__Host-` prefix).
+ * @param name - Base cookie name.
  * @param value - Cookie value; empty to clear.
- * @param path - Cookie path.
+ * @param path - Cookie path on a plain-http (loopback) issuer; `__Host-`
+ * cookies always use `/`.
  * @param sameSite - SameSite mode.
  * @returns The header value.
  */
@@ -138,9 +155,13 @@ export function bindingCookie(
   path: string,
   sameSite: "Strict" | "Lax",
 ): string {
-  const secure = ctx.issuer.startsWith("https:") ? "; Secure" : "";
+  const secure = ctx.issuer.startsWith("https:");
   const maxAge = value ? 600 : 0;
-  return `${name}=${value}; Path=${path}; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAge}${secure}`;
+  return `${bindingCookieName(ctx, name)}=${value}; Path=${
+    secure ? "/" : path
+  }; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAge}${
+    secure ? "; Secure" : ""
+  }`;
 }
 
 /**
@@ -148,6 +169,54 @@ export function bindingCookie(
  * SameSite=Lax because the callback arrives as a cross-site redirect.
  */
 export const CALLBACK_COOKIE = "dexcom_mcp_callback";
+
+/**
+ * Reads a request body as UTF-8 text, stopping as soon as it exceeds
+ * `maxBytes` so an oversized (or chunked) upload is never buffered whole.
+ *
+ * @param request - Incoming request.
+ * @param maxBytes - Size cap in bytes.
+ * @returns The text, or undefined when the body is too large or unreadable.
+ */
+export async function readBodyText(
+  request: Request,
+  maxBytes: number,
+): Promise<string | undefined> {
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await request.body?.cancel().catch(() => {});
+    return undefined;
+  }
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel().catch(() => {});
+        return undefined;
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return undefined;
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Reads an application/x-www-form-urlencoded body, capped at 64 KiB.
@@ -159,10 +228,12 @@ export async function readForm(
   request: Request,
 ): Promise<URLSearchParams | undefined> {
   const type = request.headers.get("content-type") ?? "";
-  if (!type.startsWith("application/x-www-form-urlencoded")) return undefined;
-  const text = await request.text();
-  if (text.length > 64 * 1024) return undefined;
-  return new URLSearchParams(text);
+  if (!type.startsWith("application/x-www-form-urlencoded")) {
+    await request.body?.cancel().catch(() => {});
+    return undefined;
+  }
+  const text = await readBodyText(request, 64 * 1024);
+  return text === undefined ? undefined : new URLSearchParams(text);
 }
 
 const HTML_ESCAPES: Record<string, string> = {

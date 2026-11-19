@@ -98,11 +98,13 @@ export interface Egv extends TimedRecord {
    */
   transmitterTicks: number;
   /**
-   * Glucose value in mg/dL; null when outside the measurable range.
+   * Glucose value in mg/dL. Readings outside the sensor's range carry the
+   * sentinels 39 (low) or 401 (high) together with `status`; null when no
+   * value was calculated.
    */
   value: number | null;
   /**
-   * "high" or "low" when the value is outside the measurable range.
+   * "high" or "low" when the reading is outside the sensor's range.
    */
   status: "high" | "low" | null;
   /**

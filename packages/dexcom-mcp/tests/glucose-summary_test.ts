@@ -21,3 +21,16 @@ Deno.test("summary buckets readings into consensus ranges", () => {
   assertEquals(summary.timeInRangesPercent.inRange, 14.3);
   assertEquals(summary.meanMgdl, 143);
 });
+
+Deno.test("sensor-limit sentinels count as out of range and stay in the statistics", () => {
+  const summary = summarizeGlucose([
+    egv(39, "low"),
+    egv(100),
+    egv(401, "high"),
+  ]);
+  assertEquals(summary.outOfSensorRange, { high: 1, low: 1 });
+  assertEquals(summary.readings, 3);
+  assertEquals(summary.minMgdl, 39);
+  assertEquals(summary.timeInRangesPercent.veryLow, 33.3);
+  assertEquals(summary.timeInRangesPercent.veryHigh, 33.3);
+});

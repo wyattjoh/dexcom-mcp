@@ -19,7 +19,8 @@ export interface GlucoseSummary {
    */
   readings: number;
   /**
-   * Readings reported only as "high" or "low" (outside sensor range).
+   * Readings Dexcom flags as outside the sensor's range ("high" or "low"
+   * status, reported as 401 or 39 mg/dL).
    */
   outOfSensorRange: { high: number; low: number };
   /**
@@ -71,8 +72,10 @@ const round = (value: number, digits = 1) =>
 
 /**
  * Computes a glucose summary using the international consensus ranges
- * (<54, 54-69, 70-180, 181-250, >250 mg/dL). "high"/"low" sensor-limit
- * readings count toward the very high/very low buckets.
+ * (<54, 54-69, 70-180, 181-250, >250 mg/dL). Sensor-limit readings keep their
+ * 39/401 sentinel values in the statistics (as Dexcom does) and are also
+ * counted in `outOfSensorRange`; one with no value counts toward the very
+ * low or very high bucket.
  *
  * @param egvs - EGV records.
  * @returns The summary.
@@ -81,18 +84,22 @@ export function summarizeGlucose(egvs: Egv[]): GlucoseSummary {
   const values: number[] = [];
   let sensorHigh = 0;
   let sensorLow = 0;
+  let valuelessHigh = 0;
+  let valuelessLow = 0;
   for (const egv of egvs) {
-    if (typeof egv.value === "number") values.push(egv.value);
-    else if (egv.status === "high") sensorHigh++;
+    if (egv.status === "high") sensorHigh++;
     else if (egv.status === "low") sensorLow++;
+    if (typeof egv.value === "number") values.push(egv.value);
+    else if (egv.status === "high") valuelessHigh++;
+    else if (egv.status === "low") valuelessLow++;
   }
 
   const buckets = {
-    veryLow: sensorLow,
+    veryLow: valuelessLow,
     low: 0,
     inRange: 0,
     high: 0,
-    veryHigh: sensorHigh,
+    veryHigh: valuelessHigh,
   };
   for (const value of values) {
     if (value < 54) buckets.veryLow++;
@@ -101,7 +108,7 @@ export function summarizeGlucose(egvs: Egv[]): GlucoseSummary {
     else if (value <= 250) buckets.high++;
     else buckets.veryHigh++;
   }
-  const total = values.length + sensorHigh + sensorLow;
+  const total = values.length + valuelessHigh + valuelessLow;
   const percent = (count: number) => total ? round((count / total) * 100) : 0;
 
   const times = egvs.map((egv) => egv.systemTime).sort();

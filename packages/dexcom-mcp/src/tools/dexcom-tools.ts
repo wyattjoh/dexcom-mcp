@@ -38,9 +38,8 @@ const readOnly = {
 } as const;
 
 function jsonResult(value: unknown): CallToolResult {
-  return {
-    content: [{ type: "text", text: JSON.stringify(value, null, 2) }],
-  };
+  // Compact JSON: CGM data is large and clients cap inline tool output.
+  return { content: [{ type: "text", text: JSON.stringify(value) }] };
 }
 
 function toWindow(args: DateWindow): DateWindow {
@@ -48,10 +47,23 @@ function toWindow(args: DateWindow): DateWindow {
   return validateWindow(args);
 }
 
-function withMmol(egvs: Egv[]): Array<Egv & { valueMmol: number | null }> {
+/**
+ * The EGV fields a model needs. Transmitter and device metadata repeat on
+ * every reading and are available from dexcom_get_devices.
+ */
+function compactEgvs(egvs: Egv[], mmol: boolean) {
   return egvs.map((egv) => ({
-    ...egv,
-    valueMmol: typeof egv.value === "number" ? mgdlToMmol(egv.value) : null,
+    systemTime: egv.systemTime,
+    displayTime: egv.displayTime,
+    value: egv.value,
+    ...(mmol
+      ? {
+        valueMmol: typeof egv.value === "number" ? mgdlToMmol(egv.value) : null,
+      }
+      : {}),
+    status: egv.status,
+    trend: egv.trend,
+    trendRate: egv.trendRate,
   }));
 }
 
@@ -76,7 +88,7 @@ export function createDexcomTools(
     {
       title: "Get glucose readings",
       description:
-        `Estimated glucose values (CGM readings, mg/dL, roughly every 5 minutes) with trend arrows for a window of up to 30 days. ${DATA_DELAY_NOTE}`,
+        `Estimated glucose values (CGM readings, mg/dL, roughly every 5 minutes, so about 288 per day) with trend arrows for a window of up to 30 days. "status" is "low" or "high" when the reading is outside the sensor's range (value 39 or 401). Prefer dexcom_glucose_summary for questions about more than a day or two. ${DATA_DELAY_NOTE}`,
       inputSchema: {
         ...windowShape,
         unit: z.enum(["mg/dL", "mmol/L"]).optional().describe(
@@ -88,11 +100,10 @@ export function createDexcomTools(
     wrapToolHandler("dexcom_get_egvs", async (args) => {
       const window = toWindow(args);
       const result = await run((auth) => getEgvs(auth, window));
-      return jsonResult(
-        args.unit === "mmol/L"
-          ? { ...result, records: withMmol(result.records) }
-          : result,
-      );
+      return jsonResult({
+        unit: "mg/dL",
+        records: compactEgvs(result.records, args.unit === "mmol/L"),
+      });
     }),
   );
 

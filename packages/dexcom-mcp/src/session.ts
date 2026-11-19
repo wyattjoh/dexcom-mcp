@@ -5,8 +5,9 @@ import {
   refreshTokens,
   type TokenResponse,
 } from "@wyattjoh/dexcom";
+import { randomToken } from "./crypto.ts";
 import { getLogger } from "./logging.ts";
-import type { DexcomGrant, Store } from "./store.ts";
+import type { DexcomGrant, Store, VersionedGrant } from "./store.ts";
 
 const logger = getLogger(["dexcom-mcp", "session"]);
 
@@ -14,6 +15,11 @@ const logger = getLogger(["dexcom-mcp", "session"]);
  * Refresh this long before the Dexcom access token expires.
  */
 const REFRESH_SKEW_MS = 60_000;
+
+/**
+ * How often a process waiting on another process's refresh re-checks KV.
+ */
+const LOCK_POLL_MS = 200;
 
 /**
  * Error thrown when a user's Dexcom grant is missing or revoked and they must
@@ -58,15 +64,19 @@ export function isReauthorizationRequiredError(
  *
  * @param userId - Dexcom user ID.
  * @param tokens - Token response.
+ * @param grantId - The existing grant's ID, or undefined to mint one (no
+ * grant stored, or one from before grant IDs existed).
  * @returns The grant.
  */
 export function grantFromTokens(
   userId: string,
   tokens: TokenResponse,
+  grantId: string | undefined,
 ): DexcomGrant {
   const now = Date.now();
   return {
     userId,
+    grantId: grantId || randomToken(),
     accessToken: tokens.access_token,
     refreshToken: tokens.refresh_token,
     accessTokenExpiresAt: now + tokens.expires_in * 1000,
@@ -94,9 +104,9 @@ export interface DexcomSessions {
 }
 
 /**
- * Creates the session manager. Dexcom refresh tokens are single use, so
- * refreshes are single-flighted per user in-process and committed with a KV
- * compare-and-swap so concurrent processes cannot both spend one token.
+ * Creates the session manager. Dexcom refresh tokens are single use, so a
+ * refresh is single-flighted per user in-process and serialized across
+ * processes sharing the KV by a lease, then committed with a compare-and-swap.
  *
  * @param config - Dexcom configuration.
  * @param store - Persistent store.
@@ -107,6 +117,8 @@ export function createDexcomSessions(
   store: Store,
 ): DexcomSessions {
   const inflight = new Map<string, Promise<DexcomGrant>>();
+  // Outlives the refresh request (fetch timeout) so a live holder keeps it.
+  const leaseMs = config.timeoutMs * 2 + 5_000;
 
   async function loadGrant(userId: string) {
     const versioned = await store.getGrant(userId);
@@ -118,24 +130,21 @@ export function createDexcomSessions(
     return versioned;
   }
 
-  async function doRefresh(
-    userId: string,
+  function isCurrent(
+    grant: DexcomGrant,
     staleAccessToken: string | undefined,
-  ): Promise<DexcomGrant> {
-    const { grant, versionstamp } = await loadGrant(userId);
+  ): boolean {
     // Another request (or process) already rotated past the stale token.
-    if (
-      staleAccessToken !== undefined && grant.accessToken !== staleAccessToken
-    ) {
-      return grant;
+    if (staleAccessToken !== undefined) {
+      return grant.accessToken !== staleAccessToken;
     }
-    if (
-      staleAccessToken === undefined &&
-      grant.accessTokenExpiresAt - REFRESH_SKEW_MS > Date.now()
-    ) {
-      return grant;
-    }
+    return grant.accessTokenExpiresAt - REFRESH_SKEW_MS > Date.now();
+  }
 
+  async function refreshHeld(
+    userId: string,
+    { grant, versionstamp }: VersionedGrant,
+  ): Promise<DexcomGrant> {
     let tokens: TokenResponse;
     try {
       tokens = await refreshTokens(config, grant.refreshToken);
@@ -143,37 +152,64 @@ export function createDexcomSessions(
       // Dexcom documents 400 as "this refresh token is no longer valid".
       // Other statuses (429 rate limit, 401 bad client secret, 5xx) must not
       // destroy users' grants.
-      if (isDexcomApiError(error) && error.status === 400) {
-        const current = await store.getGrant(userId);
-        if (current && current.grant.refreshToken !== grant.refreshToken) {
-          // Lost a race with another process; its rotation is valid.
-          return current.grant;
-        }
-        logger.warn("Dexcom refresh rejected; deleting grant", {
-          userId,
-          status: error.status,
-        });
-        await store.deleteGrant(userId);
-        throw createReauthorizationRequiredError(
-          "Dexcom rejected the stored refresh token (revoked, expired, or password reset). Re-authorize this MCP server with Dexcom.",
-        );
+      if (!isDexcomApiError(error) || error.status !== 400) throw error;
+      // Only delete the grant this refresh was based on; if a writer that
+      // does not hold the lease replaced it meanwhile, its tokens are newer.
+      if (!await store.deleteGrantIf(userId, versionstamp)) {
+        return (await loadGrant(userId)).grant;
       }
-      throw error;
+      logger.warn("Dexcom refresh rejected; deleted grant", {
+        userId,
+        status: error.status,
+      });
+      throw createReauthorizationRequiredError(
+        "Dexcom rejected the stored refresh token (revoked, expired, or password reset). Re-authorize this MCP server with Dexcom.",
+      );
     }
 
-    const next = grantFromTokens(userId, tokens);
-    // Persist the rotated refresh token before anyone uses the new access token.
+    const next = grantFromTokens(userId, tokens, grant.grantId);
+    // Persist the rotated refresh token before anyone uses the new access
+    // token. Dexcom already spent the old one, so these tokens are the only
+    // valid ones even if the grant changed underneath us.
     if (!await store.replaceGrant(next, versionstamp)) {
-      logger.warn(
-        "Grant changed during refresh; overwriting with newest tokens",
-        {
-          userId,
-        },
-      );
+      logger.warn("Grant changed during refresh; storing the newest tokens", {
+        userId,
+      });
       await store.putGrant(next);
     }
     logger.debug("Refreshed Dexcom tokens", { userId });
     return next;
+  }
+
+  async function doRefresh(
+    userId: string,
+    staleAccessToken: string | undefined,
+  ): Promise<DexcomGrant> {
+    const deadline = Date.now() + leaseMs;
+    while (true) {
+      const loaded = await loadGrant(userId);
+      if (isCurrent(loaded.grant, staleAccessToken)) return loaded.grant;
+
+      const owner = await store.acquireRefreshLock(userId, leaseMs);
+      if (owner === undefined) {
+        // Another process is spending the refresh token; wait for its result.
+        if (Date.now() > deadline) {
+          throw new Error(
+            "Timed out waiting for another process to refresh Dexcom tokens",
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_MS));
+        continue;
+      }
+      try {
+        // Re-read under the lease: the previous holder may have finished.
+        const current = await loadGrant(userId);
+        if (isCurrent(current.grant, staleAccessToken)) return current.grant;
+        return await refreshHeld(userId, current);
+      } finally {
+        await store.releaseRefreshLock(userId, owner);
+      }
+    }
   }
 
   function refresh(

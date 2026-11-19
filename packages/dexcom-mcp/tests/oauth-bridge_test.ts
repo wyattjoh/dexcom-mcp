@@ -389,3 +389,214 @@ Deno.test("modern-era clients receive authInfo and can call tools", async () => 
     fx.close();
   }
 });
+
+async function refreshWith(
+  http: HttpHandler,
+  clientId: string,
+  refreshToken: string,
+): Promise<Response> {
+  return await call(http, "/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      client_id: clientId,
+      refresh_token: refreshToken,
+    }),
+  });
+}
+
+async function mcpStatus(http: HttpHandler, accessToken: string) {
+  const response = await call(http, "/mcp", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+  });
+  await response.body?.cancel();
+  return response.status;
+}
+
+async function newTokens(http: HttpHandler, clientId: string) {
+  const verifier = newVerifier();
+  const redirect = await authorize(http, clientId, verifier);
+  const response = await exchange(
+    http,
+    clientId,
+    redirect.searchParams.get("code")!,
+    verifier,
+  );
+  assertEquals(response.status, 200);
+  return await response.json() as {
+    access_token: string;
+    refresh_token: string;
+  };
+}
+
+function oversizedBody(totalBytes: number) {
+  let sent = 0;
+  const chunk = new Uint8Array(64 * 1024).fill(0x61);
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (sent >= totalBytes) return controller.close();
+      sent += chunk.byteLength;
+      controller.enqueue(chunk);
+    },
+  });
+  return { stream, sent: () => sent };
+}
+
+Deno.test("oversized streamed bodies are rejected without buffering them", async () => {
+  const { fx, http } = await setup();
+  try {
+    for (
+      const [path, type] of [
+        ["/register", "application/json"],
+        ["/token", "application/x-www-form-urlencoded"],
+      ]
+    ) {
+      const body = oversizedBody(64 * 1024 * 1024);
+      const response = await call(http, path!, {
+        method: "POST",
+        headers: { "Content-Type": type! },
+        body: body.stream,
+      });
+      assertEquals(response.status, 400, path);
+      await response.body?.cancel();
+      assert(body.sent() < 1024 * 1024, `${path} read ${body.sent()} bytes`);
+    }
+  } finally {
+    fx.close();
+  }
+});
+
+Deno.test("a replayed refresh token revokes its whole token family", async () => {
+  const { fx, http } = await setup();
+  try {
+    const clientId = await register(http);
+    const first = await newTokens(http, clientId);
+    // The attacker redeems the stolen refresh token first.
+    const attacker = await (await refreshWith(
+      http,
+      clientId,
+      first.refresh_token,
+    )).json();
+    assert(attacker.refresh_token);
+    // The legitimate client's replay is detected...
+    assertEquals(
+      (await refreshWith(http, clientId, first.refresh_token)).status,
+      400,
+    );
+    // ...and every token in the family dies, including the attacker's.
+    assertEquals(
+      (await refreshWith(http, clientId, attacker.refresh_token)).status,
+      400,
+    );
+    assertEquals(await mcpStatus(http, attacker.access_token), 401);
+    assertEquals(await mcpStatus(http, first.access_token), 401);
+
+    // Another authorization of the same user is unaffected.
+    const other = await newTokens(http, clientId);
+    assert(await mcpStatus(http, other.access_token) !== 401);
+  } finally {
+    await http.close();
+    fx.close();
+  }
+});
+
+Deno.test("re-authorizing after a revoked grant does not revive old tokens", async () => {
+  const { fx, http } = await setup();
+  try {
+    const clientId = await register(http);
+    const old = await newTokens(http, clientId);
+    assert(await mcpStatus(http, old.access_token) !== 401);
+
+    // A second client connecting keeps the first one's tokens valid.
+    const second = await newTokens(http, await register(http));
+    assert(await mcpStatus(http, old.access_token) !== 401);
+
+    const grant = await fx.store.getGrant(FAKE_USER_ID);
+    assert(grant);
+    assert(await fx.store.deleteGrantIf(FAKE_USER_ID, grant.versionstamp));
+    assertEquals(await mcpStatus(http, old.access_token), 401);
+
+    const fresh = await newTokens(http, clientId);
+    assert(await mcpStatus(http, fresh.access_token) !== 401);
+    assertEquals(await mcpStatus(http, old.access_token), 401);
+    assertEquals(await mcpStatus(http, second.access_token), 401);
+    assertEquals(
+      (await refreshWith(http, clientId, old.refresh_token)).status,
+      400,
+    );
+  } finally {
+    await http.close();
+    fx.close();
+  }
+});
+
+Deno.test("malformed authorize requests show an error page instead of redirecting", async () => {
+  const { fx, http } = await setup();
+  try {
+    const clientId = await register(http);
+    const response = await call(
+      http,
+      `/authorize?${new URLSearchParams({
+        client_id: clientId,
+        redirect_uri: CLIENT_REDIRECT,
+        response_type: "token",
+      })}`,
+    );
+    assertEquals(response.status, 400);
+    assertEquals(response.headers.get("location"), null);
+    assertMatch(await response.text(), /unsupported_response_type/);
+  } finally {
+    fx.close();
+  }
+});
+
+Deno.test("https issuers use __Host- binding cookies", async () => {
+  const fx = await createFixture(0, "https://dexcom.example.com");
+  const http = createHttpHandler({
+    ctx: fx.ctx,
+    allowedOriginHostnames: ["dexcom.example.com"],
+    allowInsecureIssuer: false,
+  });
+  try {
+    const clientId = await register(http);
+    const verifier = newVerifier();
+    const consent = await call(
+      http,
+      `/authorize?${new URLSearchParams({
+        client_id: clientId,
+        redirect_uri: CLIENT_REDIRECT,
+        response_type: "code",
+        code_challenge: await sha256(verifier),
+        code_challenge_method: "S256",
+      })}`,
+    );
+    assertEquals(consent.status, 200);
+    const consentId = (await consent.text())
+      .match(/name="consent_id" value="([^"]+)"/)?.[1];
+    assert(consentId);
+    const set = consent.headers.get("set-cookie") ?? "";
+    assertMatch(set, /^__Host-dexcom_mcp_consent=[^;]+; Path=\/;.*; Secure$/);
+
+    // A plain-named cookie (as a sibling subdomain could set) is ignored.
+    const value = set.split(";")[0]!.split("=")[1]!;
+    const planted = await call(http, "/authorize", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Cookie: `dexcom_mcp_consent=${value}`,
+      },
+      body: new URLSearchParams({ consent_id: consentId, action: "approve" }),
+    });
+    assertEquals(planted.status, 403);
+    await planted.body?.cancel();
+  } finally {
+    fx.close();
+  }
+});

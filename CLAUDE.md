@@ -58,23 +58,37 @@ adapt results, and own the OAuth bridge.
 - Dexcom authorization codes are single use and expire in one minute: exchange
   them inside the callback, never at `/token`
 - Dexcom refresh tokens are single use: always go through
-  `createDexcomSessions`, which persists rotated tokens before use
+  `createDexcomSessions`, which single-flights in-process, holds a KV lease
+  (`["refresh-lock", userId]`, deadline stored in the value) across processes,
+  and persists rotated tokens before use
 - Never return or log Dexcom tokens; MCP tokens are stored only as SHA-256
   hashes
-- MCP access tokens are valid only while the user's Dexcom grant exists
+- MCP tokens belong to a token family (one authorization plus its rotations)
+  bound to the grant's `grantId`. Tokens are valid only while the family is live
+  and the user's current grant has that `grantId`. Re-authorizing keeps an
+  existing `grantId`; a deleted grant gets a new one, so old tokens never
+  revive. A replayed refresh token deletes its family. Records without
+  `familyId`/`grantId` are invalid
+- Client registrations expire after a day unless used; each token issuance
+  extends them to the refresh token lifetime
 - `/authorize` requires PKCE S256 and an exact registered `redirect_uri`;
-  consent is bound to a SameSite=Strict cookie, and the Dexcom callback to a
+  malformed requests get an error page, never a redirect (no open redirector).
+  Consent is bound to a SameSite=Strict cookie, and the Dexcom callback to a
   SameSite=Lax cookie set on approval (so a forwarded Dexcom login URL cannot
-  complete someone else's authorization)
-- Only a Dexcom 400 on refresh deletes a grant; 429/401/5xx are rethrown
+  complete someone else's authorization). On https issuers both cookies use the
+  `__Host-` prefix with `Path=/`
+- Request bodies are read with `readBodyText`, which stops at the size cap
+- Only a Dexcom 400 on refresh deletes a grant, and only with a compare-and-swap
+  on the versionstamp the refresh read; 429/401/5xx are rethrown
 - The same region host serves login, token, and data calls
 
 ## Environment Variables
 
 See `.env.example`. Required: `DEXCOM_CLIENT_ID`, `DEXCOM_CLIENT_SECRET`. HTTP:
-`MCP_PUBLIC_URL` (origin only, https off loopback). Stdio: `DEXCOM_REDIRECT_URI`
-(loopback). Optional: `DEXCOM_REGION`, `DEXCOM_BASE_URL`, `DEXCOM_MCP_KV_PATH`,
-`MCP_ALLOWED_ORIGINS`, `MCP_ACCESS_TOKEN_TTL`, `MCP_REFRESH_TOKEN_TTL`.
+`MCP_PUBLIC_URL` (origin only; https unless both it and `--host` are loopback).
+Stdio: `DEXCOM_REDIRECT_URI` (loopback). Optional: `DEXCOM_REGION`,
+`DEXCOM_BASE_URL`, `DEXCOM_MCP_KV_PATH`, `MCP_ALLOWED_ORIGINS`,
+`MCP_ACCESS_TOKEN_TTL`, `MCP_REFRESH_TOKEN_TTL`.
 
 ## Releases
 

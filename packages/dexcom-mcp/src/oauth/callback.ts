@@ -4,6 +4,7 @@ import { getLogger } from "../logging.ts";
 import { grantFromTokens } from "../session.ts";
 import {
   bindingCookie,
+  bindingCookieName,
   type BridgeContext,
   CALLBACK_COOKIE,
   DEXCOM_CALLBACK_PATH,
@@ -49,7 +50,7 @@ export async function handleDexcomCallback(
       "This Dexcom sign-in is unknown or expired. Start again from your MCP client.",
     );
   }
-  const binding = readCookie(request, CALLBACK_COOKIE);
+  const binding = readCookie(request, bindingCookieName(ctx, CALLBACK_COOKIE));
   if (
     !binding ||
     !timingSafeEqualString(await sha256(binding), stored.browserBindingHash)
@@ -91,7 +92,12 @@ export async function handleDexcomCallback(
       throw new Error("Dexcom did not return a user ID");
     }
     userId = range.userId;
-    await ctx.store.putGrant(grantFromTokens(userId, tokens));
+    // Keep the grant ID across re-authorizations so other clients' tokens
+    // for this user stay valid; a fresh ID is minted only after deletion.
+    const existing = await ctx.store.getGrant(userId);
+    await ctx.store.putGrant(
+      grantFromTokens(userId, tokens, existing?.grant.grantId),
+    );
   } catch (error) {
     logger.error("Dexcom code exchange failed", {
       error: error instanceof Error ? error.message : String(error),

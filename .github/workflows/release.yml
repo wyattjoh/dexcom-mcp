@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+  # Re-publish the current main to JSR (e.g. after a failed publish job).
+  workflow_dispatch:
 
 jobs:
   release-please:
@@ -21,7 +23,7 @@ jobs:
 
   publish:
     needs: release-please
-    if: ${{ needs.release-please.outputs.releases_created == 'true' }}
+    if: ${{ needs.release-please.outputs.releases_created == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
